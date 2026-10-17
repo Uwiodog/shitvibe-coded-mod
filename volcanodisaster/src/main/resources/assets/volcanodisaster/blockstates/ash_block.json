@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "volcanodisaster:block/ash_block"
+    }
+  }
+}

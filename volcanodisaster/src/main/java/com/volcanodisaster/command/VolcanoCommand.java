@@ -1,0 +1,198 @@
+package com.volcanodisaster.command;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.FloatArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.volcanodisaster.volcano.Volcano;
+import com.volcanodisaster.volcano.VolcanoData;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * /volcano spawn [pos] [intensity] [days]
+ * /volcano list | skip [id] | flow [id] | stop [id|all] | remove [id|all] | ashzones clear
+ * plus /disaster spawn volcano [pos] and /disaster skip volcano [pos] like the old mod.
+ */
+public final class VolcanoCommand {
+    private VolcanoCommand() {}
+
+    public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
+        dispatcher.register(Commands.literal("volcano")
+                .requires(s -> s.hasPermission(2))
+                .then(Commands.literal("spawn")
+                        .executes(ctx -> spawn(ctx.getSource(), here(ctx.getSource()), 1.0F, -1))
+                        .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                                .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"), 1.0F, -1))
+                                .then(Commands.argument("intensity", FloatArgumentType.floatArg(0.1F, 20.0F))
+                                        .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"),
+                                                FloatArgumentType.getFloat(ctx, "intensity"), -1))
+                                        .then(Commands.argument("days", FloatArgumentType.floatArg(0.0F, 100.0F))
+                                                .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"),
+                                                        FloatArgumentType.getFloat(ctx, "intensity"),
+                                                        FloatArgumentType.getFloat(ctx, "days")))))))
+                .then(Commands.literal("list")
+                        .executes(ctx -> list(ctx.getSource())))
+                .then(Commands.literal("skip")
+                        .executes(ctx -> skip(ctx.getSource(), nearest(ctx.getSource(), here(ctx.getSource()))))
+                        .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                .executes(ctx -> skip(ctx.getSource(), byId(ctx)))))
+                .then(Commands.literal("flow")
+                        .executes(ctx -> flow(ctx.getSource(), nearest(ctx.getSource(), here(ctx.getSource()))))
+                        .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                .executes(ctx -> flow(ctx.getSource(), byId(ctx)))))
+                .then(Commands.literal("stop")
+                        .executes(ctx -> stop(ctx.getSource(), single(nearest(ctx.getSource(), here(ctx.getSource())))))
+                        .then(Commands.literal("all")
+                                .executes(ctx -> stop(ctx.getSource(), new ArrayList<>(data(ctx.getSource()).all()))))
+                        .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                .executes(ctx -> stop(ctx.getSource(), single(byId(ctx))))))
+                .then(Commands.literal("remove")
+                        .executes(ctx -> remove(ctx.getSource(), single(nearest(ctx.getSource(), here(ctx.getSource())))))
+                        .then(Commands.literal("all")
+                                .executes(ctx -> remove(ctx.getSource(), new ArrayList<>(data(ctx.getSource()).all()))))
+                        .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                .executes(ctx -> remove(ctx.getSource(), single(byId(ctx))))))
+                .then(Commands.literal("ashzones")
+                        .then(Commands.literal("clear")
+                                .executes(ctx -> clearAshZones(ctx.getSource())))));
+
+        // Same syntax as the old General Disasters command.
+        dispatcher.register(Commands.literal("disaster")
+                .requires(s -> s.hasPermission(2))
+                .then(Commands.literal("spawn")
+                        .then(Commands.literal("volcano")
+                                .executes(ctx -> spawn(ctx.getSource(), here(ctx.getSource()), 1.0F, -1))
+                                .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                                        .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"), 1.0F, -1)))))
+                .then(Commands.literal("skip")
+                        .then(Commands.literal("volcano")
+                                .executes(ctx -> skip(ctx.getSource(), nearest(ctx.getSource(), here(ctx.getSource()))))
+                                .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                                        .executes(ctx -> skip(ctx.getSource(),
+                                                nearest(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"))))))));
+    }
+
+    private static int spawn(CommandSourceStack source, BlockPos pos, float intensity, float days) {
+        ServerLevel level = source.getLevel();
+        Volcano v = VolcanoData.get(level).spawn(level, pos, intensity, days);
+        String length = v.eruptionLength();
+        source.sendSuccess(() -> Component.literal("Volcano #" + v.getId() + " is opening at "
+                + pos.getX() + " " + pos.getY() + " " + pos.getZ() + " (erupts " + (length.startsWith("until") ? length : "for " + length)
+                + ", intensity " + intensity + "). Force a pyroclastic flow with /volcano flow, end it with /volcano stop " + v.getId()), true);
+        return v.getId();
+    }
+
+    private static int list(CommandSourceStack source) {
+        List<Volcano> all = data(source).all();
+        if (all.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("No active volcanoes in this dimension."), false);
+            return 0;
+        }
+        for (Volcano v : all) {
+            BlockPos c = v.getCenter();
+            String stage = v.getStage().name().toLowerCase();
+            if (v.getStage() == Volcano.Stage.ERUPTING) {
+                stage += ", " + v.getActivity().name().toLowerCase();
+            }
+            String text = "#" + v.getId() + "  " + c.getX() + " " + c.getY() + " " + c.getZ()
+                    + "  " + stage + " (" + v.timeLeft() + " left)";
+            source.sendSuccess(() -> Component.literal(text), false);
+        }
+        return all.size();
+    }
+
+    private static int skip(CommandSourceStack source, Volcano v) {
+        if (v == null) {
+            source.sendFailure(Component.literal("No volcano found."));
+            return 0;
+        }
+        Volcano.Stage before = v.getStage();
+        v.skipStage(source.getLevel());
+        data(source).setDirty();
+        source.sendSuccess(() -> Component.literal("Volcano #" + v.getId() + ": " + before.name().toLowerCase()
+                + " -> " + v.getStage().name().toLowerCase()), true);
+        return 1;
+    }
+
+    private static int flow(CommandSourceStack source, Volcano v) {
+        if (v == null) {
+            source.sendFailure(Component.literal("No volcano found."));
+            return 0;
+        }
+        if (!v.triggerFlow(source.getLevel(), data(source))) {
+            source.sendFailure(Component.literal("Volcano #" + v.getId()
+                    + " can't make a pyroclastic flow right now (it has to be erupting, and one at a time)."));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("Volcano #" + v.getId() + " is building up to a pyroclastic flow..."), true);
+        return 1;
+    }
+
+    private static int stop(CommandSourceStack source, List<Volcano> targets) {
+        if (targets.isEmpty()) {
+            source.sendFailure(Component.literal("No volcano found."));
+            return 0;
+        }
+        for (Volcano v : targets) {
+            v.stop();
+        }
+        data(source).setDirty();
+        int n = targets.size();
+        source.sendSuccess(() -> Component.literal("Stopped " + n + " volcano(es). The lava will harden over the next minute."), true);
+        return n;
+    }
+
+    private static int remove(CommandSourceStack source, List<Volcano> targets) {
+        if (targets.isEmpty()) {
+            source.sendFailure(Component.literal("No volcano found."));
+            return 0;
+        }
+        VolcanoData data = data(source);
+        for (Volcano v : targets) {
+            data.remove(source.getLevel(), v);
+        }
+        int n = targets.size();
+        source.sendSuccess(() -> Component.literal("Removed " + n + " volcano(es). Any lava already placed stays as it is."), true);
+        return n;
+    }
+
+    private static int clearAshZones(CommandSourceStack source) {
+        int n = data(source).clearAshZones();
+        source.sendSuccess(() -> Component.literal("Stopped " + n + " ash zone(s) from spreading the Ashfall biome. "
+                + "Land that already turned into Ashfall stays that way."), true);
+        return n;
+    }
+
+    private static VolcanoData data(CommandSourceStack source) {
+        return VolcanoData.get(source.getLevel());
+    }
+
+    private static BlockPos here(CommandSourceStack source) {
+        return BlockPos.containing(source.getPosition());
+    }
+
+    private static Volcano nearest(CommandSourceStack source, BlockPos pos) {
+        return data(source).nearest(pos);
+    }
+
+    private static Volcano byId(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        return data(ctx.getSource()).byId(IntegerArgumentType.getInteger(ctx, "id"));
+    }
+
+    private static List<Volcano> single(Volcano v) {
+        List<Volcano> list = new ArrayList<>();
+        if (v != null) {
+            list.add(v);
+        }
+        return list;
+    }
+}

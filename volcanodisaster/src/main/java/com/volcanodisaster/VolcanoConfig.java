@@ -1,0 +1,176 @@
+package com.volcanodisaster;
+
+import net.minecraftforge.common.ForgeConfigSpec;
+
+/**
+ * Settings file: config/volcanodisaster-common.toml (created the first time the game starts).
+ * Size settings are copied into a volcano when it is spawned; rates are read live.
+ */
+public final class VolcanoConfig {
+    public static final ForgeConfigSpec SPEC;
+
+    // Caldera
+    public static final ForgeConfigSpec.IntValue CALDERA_RADIUS;
+    public static final ForgeConfigSpec.IntValue CALDERA_DEPTH;
+    public static final ForgeConfigSpec.IntValue CLEAR_HEIGHT;
+    public static final ForgeConfigSpec.IntValue FORMING_SECONDS;
+
+    // Eruption
+    public static final ForgeConfigSpec.DoubleValue ERUPTION_DAYS;
+    public static final ForgeConfigSpec.DoubleValue FIRE_BOMBS_PER_SECOND;
+    public static final ForgeConfigSpec.DoubleValue METEORS_PER_SECOND;
+    public static final ForgeConfigSpec.IntValue RAIN_RADIUS;
+    public static final ForgeConfigSpec.DoubleValue FIRE_BOMB_BLAST_RADIUS;
+    public static final ForgeConfigSpec.DoubleValue METEOR_BLAST_RADIUS;
+    public static final ForgeConfigSpec.DoubleValue OBSIDIAN_CHANCE;
+    public static final ForgeConfigSpec.DoubleValue FIRE_CHANCE;
+    public static final ForgeConfigSpec.IntValue MAX_ACTIVE_PROJECTILES;
+    public static final ForgeConfigSpec.BooleanValue ACTIVITY_PHASES;
+    public static final ForgeConfigSpec.BooleanValue VOLCANIC_LIGHTNING;
+
+    // Scorched zone + ashfall
+    public static final ForgeConfigSpec.IntValue SCORCH_RADIUS;
+    public static final ForgeConfigSpec.IntValue SCORCH_COLUMNS_PER_TICK;
+    public static final ForgeConfigSpec.IntValue ASHFALL_COLUMNS_PER_TICK;
+
+    // Pyroclastic flows
+    public static final ForgeConfigSpec.DoubleValue FLOWS_PER_DAY;
+    public static final ForgeConfigSpec.IntValue FLOW_RADIUS;
+    public static final ForgeConfigSpec.DoubleValue FLOW_SPEED;
+    public static final ForgeConfigSpec.IntValue FLOW_HEIGHT;
+    public static final ForgeConfigSpec.IntValue FLOW_BUILDUP_SECONDS;
+    public static final ForgeConfigSpec.BooleanValue FLOW_BLAST;
+    public static final ForgeConfigSpec.DoubleValue FLOW_DAMAGE;
+
+    // Ash biome + client effects
+    public static final ForgeConfigSpec.IntValue ASH_BIOME_RADIUS;
+    public static final ForgeConfigSpec.BooleanValue ASH_FOG;
+    public static final ForgeConfigSpec.IntValue ASH_FOG_DISTANCE;
+    public static final ForgeConfigSpec.BooleanValue SCREEN_SHAKE;
+
+    // Lava spill
+    public static final ForgeConfigSpec.BooleanValue LAVA_SPILL;
+    public static final ForgeConfigSpec.IntValue SPILL_INTERVAL_TICKS;
+    public static final ForgeConfigSpec.IntValue MAX_SPILL_DISTANCE;
+    public static final ForgeConfigSpec.IntValue SPILL_SPREAD_SECONDS;
+
+    // Cooling
+    public static final ForgeConfigSpec.IntValue COOLING_SECONDS;
+    public static final ForgeConfigSpec.BooleanValue COOL_TO_OBSIDIAN;
+
+    // Unloaded chunks
+    public static final ForgeConfigSpec.BooleanValue IMPACT_UNLOADED_CHUNKS;
+    public static final ForgeConfigSpec.IntValue REMOTE_BURN_SECONDS;
+    public static final ForgeConfigSpec.IntValue MAX_REMOTE_CHUNKS;
+    public static final ForgeConfigSpec.BooleanValue KEEP_VOLCANO_LOADED;
+
+    static {
+        ForgeConfigSpec.Builder b = new ForgeConfigSpec.Builder();
+
+        b.comment("The lava crater. Its lava surface sits exactly at the Y level the volcano is spawned at.").push("caldera");
+        CALDERA_RADIUS = b.comment("Radius of the lava caldera in blocks.")
+                .defineInRange("radius", 14, 4, 64);
+        CALDERA_DEPTH = b.comment("How deep the lava is in the middle of the caldera.")
+                .defineInRange("depth", 7, 2, 40);
+        CLEAR_HEIGHT = b.comment("Everything this many blocks above the lava inside the caldera is wiped out when it forms.")
+                .defineInRange("clearHeight", 48, 0, 384);
+        FORMING_SECONDS = b.comment("How long the caldera takes to open up before the eruption starts.")
+                .defineInRange("formingSeconds", 10, 0, 600);
+        b.pop();
+
+        b.comment("Fire and meteor rain.").push("eruption");
+        ERUPTION_DAYS = b.comment("How many in-game days the eruption lasts (1 day = 20 real minutes; 0 = until you run /volcano stop). /volcano spawn can override this.")
+                .defineInRange("eruptionDays", 3.0, 0.0, 100.0);
+        FIRE_BOMBS_PER_SECOND = b.comment("Burning lava bombs thrown out of the caldera per second while 'active' (multiplied by intensity and the current phase).")
+                .defineInRange("fireBombsPerSecond", 10.0, 0.0, 200.0);
+        METEORS_PER_SECOND = b.comment("Meteors falling from the sky per second while 'active' (multiplied by intensity and the current phase).")
+                .defineInRange("meteorsPerSecond", 2.0, 0.0, 100.0);
+        RAIN_RADIUS = b.comment("How far from the volcano fire bombs and meteors can land.")
+                .defineInRange("rainRadius", 200, 16, 2000);
+        FIRE_BOMB_BLAST_RADIUS = b.comment("Crater radius of a fire bomb hit.")
+                .defineInRange("fireBombBlastRadius", 2.5, 0.0, 10.0);
+        METEOR_BLAST_RADIUS = b.comment("Crater radius of a meteor hit.")
+                .defineInRange("meteorBlastRadius", 5.5, 0.0, 16.0);
+        OBSIDIAN_CHANCE = b.comment("Chance for each block of a meteor crater's surface to turn into obsidian/magma (fire bombs use a quarter of this).")
+                .defineInRange("obsidianChance", 0.45, 0.0, 1.0);
+        FIRE_CHANCE = b.comment("Chance for each block around a hit to be set on fire (fire bombs use more).")
+                .defineInRange("fireChance", 0.35, 0.0, 1.0);
+        MAX_ACTIVE_PROJECTILES = b.comment("Max flying fire bombs + meteors per volcano at once (keeps the game from lagging out).")
+                .defineInRange("maxActiveProjectiles", 600, 10, 5000);
+        ACTIVITY_PHASES = b.comment("The eruption switches every few minutes between simmering (light rain), active, and frenzy (heavy rain, lightning, likely pyroclastic flows). Off = always active.")
+                .define("activityPhases", true);
+        VOLCANIC_LIGHTNING = b.comment("Lightning flashes in the eruption column during frenzies and before pyroclastic flows (visual only, doesn't start fires).")
+                .define("volcanicLightning", true);
+        b.pop();
+
+        b.comment("The land around the caldera slowly gets scorched and buried in ash.").push("scorch");
+        SCORCH_RADIUS = b.comment("How far from the caldera the ground gets scorched (grass burns to dirt, trees lose leaves, fires, ash). Grows to this over the first in-game day.")
+                .defineInRange("radius", 72, 0, 512);
+        SCORCH_COLUMNS_PER_TICK = b.comment("How many spots inside the scorch zone get hit per tick.")
+                .defineInRange("columnsPerTick", 30, 0, 1000);
+        ASHFALL_COLUMNS_PER_TICK = b.comment("How many spots inside the ash biome get a layer of ash per tick while the volcano erupts (0 = no ash piling up).")
+                .defineInRange("ashfallColumnsPerTick", 6, 0, 500);
+        b.pop();
+
+        b.comment("Pyroclastic flows: after a short build-up the eruption column collapses and a scorching ash cloud races outwards along the ground.").push("pyroclasticFlow");
+        FLOWS_PER_DAY = b.comment("Average pyroclastic flows per in-game day (0 = only when you run /volcano flow). The first one comes 3-6 minutes into the eruption.")
+                .defineInRange("flowsPerDay", 2.0, 0.0, 50.0);
+        FLOW_RADIUS = b.comment("How far a flow can reach from the volcano (the actual reach varies by direction).")
+                .defineInRange("radius", 260, 32, 1500);
+        FLOW_SPEED = b.comment("Speed of the flow front in blocks per tick (1.0 = 20 blocks per second). Slower is easier on the game.")
+                .defineInRange("speed", 1.0, 0.1, 5.0);
+        FLOW_HEIGHT = b.comment("How tall the ash cloud is near the volcano (it thins out further away). Anything inside it gets torched.")
+                .defineInRange("height", 24, 4, 128);
+        FLOW_BUILDUP_SECONDS = b.comment("Warning time before a flow: the ground around the caldera gets scorched, the volcano roars, then boom.")
+                .defineInRange("buildupSeconds", 12, 0, 120);
+        FLOW_BLAST = b.comment("Close to the volcano the flow knocks down weak blocks (wood, glass, wool, dirt, sand...). Stone, brick, concrete, terracotta and quartz survive.")
+                .define("blast", true);
+        FLOW_DAMAGE = b.comment("Damage dealt to mobs and players (not in creative) caught in the flow, plus setting them on fire.")
+                .defineInRange("damage", 12.0, 0.0, 1000.0);
+        b.pop();
+
+        b.comment("Ash sky: the land around the volcano becomes the 'Ashfall' biome (dark sky, falling ash, grey grass, thick haze).").push("ashBiome");
+        ASH_BIOME_RADIUS = b.comment("Radius of the Ashfall biome around a new volcano (0 = off). The biome change is permanent, even after the volcano is gone; chunks you load later are converted too.")
+                .defineInRange("radius", 500, 0, 4000);
+        ASH_FOG = b.comment("Thick ash haze while you're inside the Ashfall biome (client side).")
+                .define("haze", true);
+        ASH_FOG_DISTANCE = b.comment("How far you can see through the haze, in blocks.")
+                .defineInRange("hazeDistance", 96, 16, 1024);
+        SCREEN_SHAKE = b.comment("Screen shakes from the build-up, pyroclastic flows and nearby meteor hits (client side; also follows the vanilla 'Screen Effects' slider).")
+                .define("screenShake", true);
+        b.pop();
+
+        b.comment("Lava slowly overflowing from the caldera.").push("lavaSpill");
+        LAVA_SPILL = b.comment("Whether the caldera slowly spills lava into its surroundings.")
+                .define("enabled", true);
+        SPILL_INTERVAL_TICKS = b.comment("Ticks between new lava spill sources while 'active' (20 ticks = 1 second; lower = more lava).")
+                .defineInRange("intervalTicks", 10, 1, 1200);
+        MAX_SPILL_DISTANCE = b.comment("How far beyond the caldera rim the spill can reach.")
+                .defineInRange("maxDistance", 50, 0, 256);
+        SPILL_SPREAD_SECONDS = b.comment("Seconds of eruption until the spill reaches its max distance.")
+                .defineInRange("spreadSeconds", 1800, 1, 864000);
+        b.pop();
+
+        b.comment("What happens when the eruption ends.").push("cooling");
+        COOL_TO_OBSIDIAN = b.comment("Turn the caldera and spilled lava into obsidian when the eruption ends.")
+                .define("coolToObsidian", true);
+        COOLING_SECONDS = b.comment("How long the lava takes to harden.")
+                .defineInRange("coolingSeconds", 60, 1, 3600);
+        b.pop();
+
+        b.comment("Destruction far away from players.").push("unloadedChunks");
+        IMPACT_UNLOADED_CHUNKS = b.comment("Fire bombs and meteors also hit chunks no player is near: the chunk is loaded, wrecked and left burning for a while. (Pyroclastic flows always reach unloaded chunks: they are hit as soon as they load.)")
+                .define("enabled", true);
+        REMOTE_BURN_SECONDS = b.comment("How long a far-away chunk that got hit stays loaded so fires keep spreading there.")
+                .defineInRange("burnSeconds", 15, 1, 600);
+        MAX_REMOTE_CHUNKS = b.comment("Max far-away hit chunks kept loaded at the same time (higher = more distant destruction, more lag).")
+                .defineInRange("maxLoadedChunks", 64, 1, 1024);
+        KEEP_VOLCANO_LOADED = b.comment("Keep the volcano area loaded and running even when you fly far away.")
+                .define("keepVolcanoLoaded", true);
+        b.pop();
+
+        SPEC = b.build();
+    }
+
+    private VolcanoConfig() {}
+}
