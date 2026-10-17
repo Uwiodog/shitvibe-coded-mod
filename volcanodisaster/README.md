@@ -52,6 +52,13 @@ A volcano you can drop into any world, made for wrecking city maps. Inspired by 
 - **Vents come and go:** two vents erupt right away, the rest wake up over the next few minutes.
   Each vent erupts for 5-25 real minutes with its own strength, then cools to obsidian - and a new
   vent opens somewhere else in the cluster. This goes on for 5 in-game days by default.
+- **Cluster intensity 1-5** (`/volcano cluster intensity <1-5>`, default 3): 1 = barely smoking,
+  2 = restless, 3 = erupting, 4 = raging, 5 = apocalyptic. It scales every vent's fire rate, how strong
+  new vents are, how often pyroclastic flows and meteor showers happen, and how fast new vents open.
+- **Meteor showers over the whole cluster:** while any vent erupts, meteors (small to huge) fall
+  anywhere in the cluster now and then, and every so often a full meteor shower rains down for 30-90
+  seconds ("Meteor shower!" shows on screen). `/volcano cluster shower` starts one now. Cluster vents
+  don't throw their own long-range meteors - the showers cover the whole area instead.
 - **Local pyroclastic flows** from each vent (about 200 blocks), and when **half the cluster is
   erupting at once**, a **great pyroclastic flow**: every vent roars, the whole area shakes, and a
   40-block-tall wall of ash sweeps 300-500 blocks out from the most violent vent, flattening
@@ -63,9 +70,12 @@ A volcano you can drop into any world, made for wrecking city maps. Inspired by 
   big cluster doesn't melt your PC.
 
 **Far-away destruction:** fire bombs and meteors aimed at places no player is near still land:
-the chunk is loaded, wrecked and kept burning for a while. Pyroclastic flows remember every chunk
-they passed that wasn't loaded and torch it the moment it loads. The ash biome also spreads into
-chunks as they load.
+the chunk is loaded, wrecked and kept burning for a while. Pyroclastic flows and the Ashfall biome
+can only change chunks that are loaded at that moment; the chunks they skipped are loaded quietly in
+the background afterwards (8 per second by default) and finished off, so no untouched patches are
+left. Only chunks that already exist in your save are loaded this way, so nothing new gets generated
+into the void around a downloaded map. (Map mods may still show old colours until you fly over an
+area again.)
 
 ## Commands (need cheats / op)
 
@@ -82,6 +92,8 @@ chunks as they load.
 | `/volcano spawn cluster [x y z] [width] [vents] [days]` | Volcanic cluster centred here. `width` 500-3000, `vents` 5-20, `days` = how long new vents keep opening (0 = until stopped) |
 | `/volcano cluster list` | Clusters in this dimension and what their vents are doing |
 | `/volcano cluster info [id]` | A cluster's vents, nearest first, with position, stage and intensity |
+| `/volcano cluster intensity <1-5> [id]` | How active the cluster is (1 = barely smoking ... 5 = apocalyptic) |
+| `/volcano cluster shower [id]` | Start a meteor shower over the cluster now |
 | `/volcano cluster flow [id]` | Unleash a great pyroclastic flow now |
 | `/volcano cluster stop [id\|all]` | No new vents; erupting ones cool down |
 | `/volcano cluster remove [id\|all]` | Delete the cluster and all its vents and geysers immediately |
@@ -119,7 +131,7 @@ changed defaults aren't: pyroclastic flow `damage` is now 20 for new configs (it
 
 **On your PC:** install Java 17 (for example Temurin 17 from adoptium.net), open a terminal in this
 folder and run `gradlew build` (Windows) or `./gradlew build` (Mac/Linux). The first build downloads
-Minecraft and Forge and takes several minutes. The mod ends up in `build/libs/volcanodisaster-1.3.0.jar`;
+Minecraft and Forge and takes several minutes. The mod ends up in `build/libs/volcanodisaster-1.4.0.jar`;
 put it in your `.minecraft/mods` folder next to Forge 1.20.1.
 
 **Without installing anything:** make a new GitHub repository, upload all of these files (including

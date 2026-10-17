@@ -21,7 +21,7 @@ import java.util.List;
 /**
  * /volcano spawn [pos] [intensity 1-20] [days]
  * /volcano spawn cluster [pos] [width] [vents] [days]
- * /volcano cluster list | info [id] | flow [id] | stop [id|all] | remove [id|all]
+ * /volcano cluster list | info [id] | intensity <1-5> [id] | shower [id] | flow [id] | stop [id|all] | remove [id|all]
  * /volcano list | intensity <1-20> [id] | skip [id] | flow [id] | stop [id|all] | remove [id|all] | ashzones clear
  * plus /disaster spawn volcano [pos] and /disaster skip volcano [pos] like the old mod.
  */
@@ -95,6 +95,17 @@ public final class VolcanoCommand {
                                 .executes(ctx -> clusterInfo(ctx.getSource(), nearestCluster(ctx.getSource())))
                                 .then(Commands.argument("id", IntegerArgumentType.integer(1))
                                         .executes(ctx -> clusterInfo(ctx.getSource(), clusterById(ctx)))))
+                        .then(Commands.literal("intensity")
+                                .then(Commands.argument("level", IntegerArgumentType.integer(1, 5))
+                                        .executes(ctx -> clusterIntensity(ctx.getSource(), nearestCluster(ctx.getSource()),
+                                                IntegerArgumentType.getInteger(ctx, "level")))
+                                        .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                                .executes(ctx -> clusterIntensity(ctx.getSource(), clusterById(ctx),
+                                                        IntegerArgumentType.getInteger(ctx, "level"))))))
+                        .then(Commands.literal("shower")
+                                .executes(ctx -> shower(ctx.getSource(), nearestCluster(ctx.getSource())))
+                                .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                        .executes(ctx -> shower(ctx.getSource(), clusterById(ctx)))))
                         .then(Commands.literal("flow")
                                 .executes(ctx -> greatFlow(ctx.getSource(), nearestCluster(ctx.getSource())))
                                 .then(Commands.argument("id", IntegerArgumentType.integer(1))
@@ -247,7 +258,8 @@ public final class VolcanoCommand {
         source.sendSuccess(() -> Component.literal("Volcanic cluster #" + c.getId() + " is waking up around "
                 + pos.getX() + " " + pos.getZ() + ": " + c.getVentTarget() + " vents across " + c.getWidth() + " blocks, new ones opening "
                 + (length.startsWith("until") ? length : "for " + length)
-                + ". Vents open near Y " + pos.getY() + ". See it with /volcano cluster info, unleash a great pyroclastic flow with /volcano cluster flow."), true);
+                + ". Vents open near Y " + pos.getY() + ". Control it with /volcano cluster intensity <1-5>, see it with /volcano cluster info,"
+                + " call a meteor shower with /volcano cluster shower, unleash a great pyroclastic flow with /volcano cluster flow."), true);
         return c.getId();
     }
 
@@ -284,6 +296,28 @@ public final class VolcanoCommand {
             String line = "  #" + v.getId() + "  " + p.getX() + " " + p.getY() + " " + p.getZ() + "  " + stage + " (" + v.timeLeft() + " left)";
             source.sendSuccess(() -> Component.literal(line), false);
         }
+        return 1;
+    }
+
+    private static int clusterIntensity(CommandSourceStack source, VolcanoCluster c, int value) {
+        if (c == null) {
+            source.sendFailure(Component.literal("No volcanic cluster found."));
+            return 0;
+        }
+        data(source).setClusterActivity(c, value);
+        String[] words = {"barely smoking", "restless", "erupting", "raging", "apocalyptic"};
+        source.sendSuccess(() -> Component.literal("Cluster #" + c.getId() + " is now at intensity " + value + "/5 ("
+                + words[value - 1] + ")."), true);
+        return value;
+    }
+
+    private static int shower(CommandSourceStack source, VolcanoCluster c) {
+        if (c == null) {
+            source.sendFailure(Component.literal("No volcanic cluster found."));
+            return 0;
+        }
+        data(source).startShower(source.getLevel(), c);
+        source.sendSuccess(() -> Component.literal("Meteor shower over cluster #" + c.getId() + "!"), true);
         return 1;
     }
 

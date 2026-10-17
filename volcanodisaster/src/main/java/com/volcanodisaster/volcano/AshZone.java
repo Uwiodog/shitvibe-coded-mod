@@ -30,6 +30,8 @@ public class AshZone {
     final int radius;
     private final Set<Long> done = new HashSet<>();
     private int sweepIndex;
+    /** Position of the background catch-up scan (chunks that weren't loaded during the sweep). */
+    private int catchIndex;
 
     AshZone(int cx, int cz, int radius) {
         this.cx = cx;
@@ -70,6 +72,38 @@ public class AshZone {
         }
     }
 
+    /**
+     * Next chunk in the zone that still isn't Ashfall and exists in the save (so loading it won't
+     * generate new terrain), or null if there's nothing left. Chunks that were never generated are
+     * skipped; if they get generated later they're converted as they load.
+     */
+    Long nextCatchUp(ServerLevel level, Set<Long> busy) {
+        int rc = (radius >> 4) + 1;
+        int side = 2 * rc + 1;
+        int total = side * side;
+        if (sweepIndex < total) {
+            return null; // let the sweep of loaded chunks finish first
+        }
+        for (int checks = 0; checks < 256 && catchIndex < total; checks++, catchIndex++) {
+            int chunkX = (cx >> 4) + catchIndex % side - rc;
+            int chunkZ = (cz >> 4) + catchIndex / side - rc;
+            long key = ChunkPos.asLong(chunkX, chunkZ);
+            if (done.contains(key) || busy.contains(key) || !touches(chunkX, chunkZ)) {
+                continue;
+            }
+            if (!RegionFiles.chunkExists(level, chunkX, chunkZ)) {
+                continue;
+            }
+            catchIndex++;
+            return key;
+        }
+        return null;
+    }
+
+    boolean isDone(long key) {
+        return done.contains(key);
+    }
+
     /** Called for chunks that just loaded. */
     boolean convertIfLoaded(ServerLevel level, int chunkX, int chunkZ, List<ChunkAccess> changed) {
         long key = ChunkPos.asLong(chunkX, chunkZ);
@@ -100,6 +134,7 @@ public class AshZone {
         tag.putInt("Z", cz);
         tag.putInt("Radius", radius);
         tag.putInt("Sweep", sweepIndex);
+        tag.putInt("Catch", catchIndex);
         long[] arr = new long[done.size()];
         int i = 0;
         for (long l : done) {
@@ -112,6 +147,7 @@ public class AshZone {
     static AshZone load(CompoundTag tag) {
         AshZone z = new AshZone(tag.getInt("X"), tag.getInt("Z"), tag.getInt("Radius"));
         z.sweepIndex = tag.getInt("Sweep");
+        z.catchIndex = tag.getInt("Catch");
         for (long l : tag.getLongArray("Done")) {
             z.done.add(l);
         }

@@ -2,7 +2,6 @@ package com.volcanodisaster.volcano;
 
 import com.volcanodisaster.VolcanoConfig;
 import com.volcanodisaster.entity.FireBombEntity;
-import com.volcanodisaster.entity.MeteorEntity;
 import com.volcanodisaster.entity.ModEntities;
 import com.volcanodisaster.entity.VolcanicProjectile;
 import com.volcanodisaster.network.ModNetwork;
@@ -28,7 +27,6 @@ import net.minecraft.world.level.material.FluidState;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.Iterator;
 import java.util.List;
 
 /**
@@ -84,6 +82,8 @@ public class Volcano {
     private double meteorBudget;
     private double bombardmentBudget;
     private boolean distant;
+    /** Activity multiplier of this vent's cluster (from /volcano cluster intensity), 1 for stand-alone volcanoes. */
+    private double clusterFactor = 1.0;
     private boolean ticketActive;
     private int ticketDistance;
     private List<int[]> carveColumns;
@@ -133,7 +133,7 @@ public class Volcano {
 
     /** Fire bombs and meteors are scaled down for cluster vents (there are many of them). */
     private double ventFactor() {
-        return clusterId != 0 ? VolcanoConfig.VENT_RATE.get() : 1.0;
+        return clusterId != 0 ? VolcanoConfig.VENT_RATE.get() * clusterFactor : 1.0;
     }
 
     public Stage getStage() {
@@ -277,6 +277,9 @@ public class Volcano {
 
     void tick(ServerLevel level, VolcanoData data) {
         RandomSource rand = level.getRandom();
+        if (clusterId != 0) {
+            clusterFactor = data.clusterFactor(clusterId);
+        }
         updateTicket(level);
         stageTicks++;
         switch (stage) {
@@ -364,7 +367,10 @@ public class Volcano {
             }
         }
         // Further out: every now and then a meteor of random size somewhere across the city.
-        bombardmentBudget += VolcanoConfig.BOMBARDMENT_HITS_PER_MINUTE.get() * rate * vent / 1200.0;
+        // (Cluster vents leave this to the cluster's meteor showers.)
+        if (clusterId == 0) {
+            bombardmentBudget += VolcanoConfig.BOMBARDMENT_HITS_PER_MINUTE.get() * rate / 1200.0;
+        }
         while (bombardmentBudget >= 1.0) {
             bombardmentBudget -= 1.0;
             double[] t = bombardmentTarget(level, rand);
@@ -398,7 +404,7 @@ public class Volcano {
             if (firstFlowAt >= 0) {
                 due = stageTicks >= firstFlowAt;
             } else {
-                double chance = VolcanoConfig.FLOWS_PER_DAY.get() / TICKS_PER_DAY * Math.pow(rate, 1.5);
+                double chance = VolcanoConfig.FLOWS_PER_DAY.get() / TICKS_PER_DAY * Math.pow(rate, 1.5) * clusterFactor;
                 due = rand.nextDouble() < chance;
             }
             if (due) {
@@ -638,40 +644,7 @@ public class Volcano {
 
     /** @param size 0 = small, 1 = medium, 2 = huge */
     private void dropMeteor(ServerLevel level, RandomSource rand, double[] t, int size) {
-        float power = switch (size) {
-            case 0 -> 0.45F + rand.nextFloat() * 0.35F;
-            case 1 -> 0.9F + rand.nextFloat() * 0.4F;
-            default -> 1.6F + rand.nextFloat() * 0.8F;
-        };
-        if (inFlight.size() < VolcanoConfig.MAX_ACTIVE_PROJECTILES.get() && RemoteImpacts.isLive(level, t[0], t[1])) {
-            int ty = level.getHeight(Heightmap.Types.MOTION_BLOCKING, Mth.floor(t[0]), Mth.floor(t[1]));
-            double a = rand.nextDouble() * Math.PI * 2;
-            double off = 15 + rand.nextDouble() * 45;
-            double sx = t[0] + Math.cos(a) * off;
-            double sz = t[1] + Math.sin(a) * off;
-            if (!RemoteImpacts.isLive(level, sx, sz)) {
-                sx = t[0];
-                sz = t[1];
-            }
-            double sy = Math.min(ty + 90 + rand.nextDouble() * 60, level.getMaxBuildHeight() + 48);
-            double dx = t[0] - sx;
-            double dy = ty - sy;
-            double dz = t[1] - sz;
-            // Big ones come in a little slower, so you see them coming.
-            double speed = size == 2 ? 1.6 : 2.2;
-            int ticks = Mth.clamp((int) (Math.sqrt(dx * dx + dy * dy + dz * dz) / speed), 15, 140);
-            MeteorEntity meteor = new MeteorEntity(switch (size) {
-                case 0 -> ModEntities.METEOR_SMALL.get();
-                case 1 -> ModEntities.METEOR.get();
-                default -> ModEntities.METEOR_LARGE.get();
-            }, level);
-            meteor.launch(sx, sy, sz, dx, dy, dz, ticks);
-            meteor.setPower(power);
-            level.addFreshEntity(meteor);
-            inFlight.add(meteor);
-        } else if (VolcanoConfig.IMPACT_UNLOADED_CHUNKS.get()) {
-            RemoteImpacts.add(level, t[0], t[1], true, power);
-        }
+        Meteors.drop(level, t[0], t[1], size, rand, inFlight);
     }
 
     /**
@@ -845,21 +818,8 @@ public class Volcano {
 
     // ------------------------------------------------------------------ housekeeping
 
-    /** Turns rocks that flew into chunks nobody is near (where they'd freeze in mid-air) into far-away hits. */
     private void checkInFlight(ServerLevel level) {
-        Iterator<VolcanicProjectile> it = inFlight.iterator();
-        while (it.hasNext()) {
-            VolcanicProjectile e = it.next();
-            if (e.isRemoved()) {
-                it.remove();
-            } else if (!level.isPositionEntityTicking(e.blockPosition())) {
-                if (VolcanoConfig.IMPACT_UNLOADED_CHUNKS.get()) {
-                    RemoteImpacts.add(level, e.getTargetX(), e.getTargetZ(), e.isMeteor(), e.getPower());
-                }
-                e.discard();
-                it.remove();
-            }
-        }
+        Meteors.checkInFlight(level, inFlight);
     }
 
     /** Keeps the caldera and spill area loaded and ticking so it keeps erupting while you're elsewhere. */

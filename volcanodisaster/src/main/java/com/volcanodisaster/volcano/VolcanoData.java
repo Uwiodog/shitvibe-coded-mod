@@ -7,6 +7,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.TicketType;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -14,6 +15,8 @@ import net.minecraft.world.level.saveddata.SavedData;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +31,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public class VolcanoData extends SavedData {
     private static final String NAME = "volcanodisaster_volcanoes";
     private static final int LOADED_CHUNKS_PER_TICK = 64;
+    private static final TicketType<Long> CATCH_UP_TICKET = TicketType.create("volcanodisaster:catch_up", Long::compare);
+    private static final int CATCH_UP_TIMEOUT = 20 * 20;
 
     /** Chunks that loaded since the last tick, per dimension (filled from the chunk-load event). */
     private static final Map<ResourceKey<Level>, Queue<Long>> JUST_LOADED = new ConcurrentHashMap<>();
@@ -39,6 +44,11 @@ public class VolcanoData extends SavedData {
     private final List<Geyser> geysers = new ArrayList<>();
     private int nextId = 1;
 
+    // Background catch-up (not saved): chunks being loaded so skipped flow/biome work can be done.
+    private final List<long[]> catchUpJobs = new ArrayList<>();
+    private final Set<Long> catchUpBusy = new HashSet<>();
+    private double catchUpBudget;
+
     public static VolcanoData get(ServerLevel level) {
         return level.getDataStorage().computeIfAbsent(VolcanoData::load, VolcanoData::new, NAME);
     }
@@ -49,6 +59,7 @@ public class VolcanoData extends SavedData {
 
     public static void clearStatic() {
         JUST_LOADED.clear();
+        RegionFiles.clear();
     }
 
     public List<Volcano> all() {
@@ -149,6 +160,22 @@ public class VolcanoData extends SavedData {
             }
         }
         return best;
+    }
+
+    /** Activity multiplier of a cluster (1 if it's gone). */
+    double clusterFactor(int clusterId) {
+        VolcanoCluster c = clusterById(clusterId);
+        return c != null ? c.factor() : 1.0;
+    }
+
+    public void setClusterActivity(VolcanoCluster c, int value) {
+        c.setActivity(value);
+        setDirty();
+    }
+
+    public void startShower(ServerLevel level, VolcanoCluster c) {
+        c.startShower(level);
+        setDirty();
     }
 
     public boolean startGreatFlow(ServerLevel level, VolcanoCluster c) {
@@ -255,7 +282,8 @@ public class VolcanoData extends SavedData {
         List<ChunkAccess> biomeChanged = new ArrayList<>();
         handleLoadedChunks(level, biomeChanged);
 
-        if (volcanoes.isEmpty() && flows.isEmpty() && ashZones.isEmpty() && clusters.isEmpty() && geysers.isEmpty()) {
+        if (volcanoes.isEmpty() && flows.isEmpty() && ashZones.isEmpty() && clusters.isEmpty() && geysers.isEmpty()
+                && catchUpJobs.isEmpty()) {
             return;
         }
 
@@ -288,10 +316,91 @@ public class VolcanoData extends SavedData {
         }
         flows.removeIf(PyroclasticFlow::isFinished);
 
+        tickCatchUp(level, biomeChanged);
+
         if (!biomeChanged.isEmpty()) {
             level.getChunkSource().chunkMap.resendBiomesForChunks(biomeChanged);
         }
         setDirty();
+    }
+
+    /**
+     * Pyroclastic flows and the Ashfall biome only change chunks that are loaded at the time; the
+     * rest are remembered. This quietly loads those leftover chunks a few at a time (only ones that
+     * already exist in the save), finishes them off, and lets them unload again, so the damage
+     * fills in completely instead of leaving untouched patches.
+     */
+    private void tickCatchUp(ServerLevel level, List<ChunkAccess> biomeChanged) {
+        Iterator<long[]> it = catchUpJobs.iterator();
+        while (it.hasNext()) {
+            long[] job = it.next();
+            job[1]++;
+            int x = ChunkPos.getX(job[0]);
+            int z = ChunkPos.getZ(job[0]);
+            boolean ready = true;
+            for (int dx = -1; dx <= 1 && ready; dx++) {
+                for (int dz = -1; dz <= 1 && ready; dz++) {
+                    ready = level.getChunkSource().getChunkNow(x + dx, z + dz) != null;
+                }
+            }
+            if (ready) {
+                applyChunk(level, x, z, job[0], biomeChanged);
+            }
+            if (ready || job[1] > CATCH_UP_TIMEOUT) {
+                ChunkPos cp = new ChunkPos(x, z);
+                level.getChunkSource().removeRegionTicket(CATCH_UP_TICKET, cp, 1, job[0]);
+                catchUpBusy.remove(job[0]);
+                it.remove();
+            }
+        }
+
+        double perSecond = VolcanoConfig.CATCH_UP_CHUNKS_PER_SECOND.get();
+        if (perSecond <= 0) {
+            return;
+        }
+        int maxJobs = Math.max(2, (int) Math.ceil(perSecond * 2));
+        catchUpBudget = Math.min(catchUpBudget + perSecond / 20.0, maxJobs);
+        while (catchUpBudget >= 1.0 && catchUpJobs.size() < maxJobs) {
+            Long next = nextCatchUpChunk(level);
+            if (next == null) {
+                catchUpBudget = 0;
+                break;
+            }
+            catchUpBudget -= 1.0;
+            ChunkPos cp = new ChunkPos(ChunkPos.getX(next), ChunkPos.getZ(next));
+            level.getChunkSource().addRegionTicket(CATCH_UP_TICKET, cp, 1, next);
+            catchUpBusy.add(next);
+            catchUpJobs.add(new long[]{next, 0});
+        }
+    }
+
+    private Long nextCatchUpChunk(ServerLevel level) {
+        for (PyroclasticFlow f : flows) {
+            if (f.stage == PyroclasticFlow.Stage.DONE) { // once the front has gone all the way
+                Long key = f.nextMissed(level, catchUpBusy);
+                if (key != null) {
+                    return key;
+                }
+            }
+        }
+        for (AshZone zone : ashZones) {
+            Long key = zone.nextCatchUp(level, catchUpBusy);
+            if (key != null) {
+                return key;
+            }
+        }
+        return null;
+    }
+
+    private void applyChunk(ServerLevel level, int chunkX, int chunkZ, long key, List<ChunkAccess> biomeChanged) {
+        for (AshZone zone : ashZones) {
+            zone.convertIfLoaded(level, chunkX, chunkZ, biomeChanged);
+        }
+        for (PyroclasticFlow f : flows) {
+            if (f.hasMissed(key)) {
+                f.applyMissedChunk(level, chunkX, chunkZ);
+            }
+        }
     }
 
     /** Chunks that just loaded catch up on anything that happened while they were unloaded. */
@@ -314,14 +423,7 @@ public class VolcanoData extends SavedData {
             if (level.getChunkSource().getChunkNow(chunkX, chunkZ) == null) {
                 continue;
             }
-            for (AshZone zone : ashZones) {
-                zone.convertIfLoaded(level, chunkX, chunkZ, biomeChanged);
-            }
-            for (PyroclasticFlow f : flows) {
-                if (f.hasMissed(key)) {
-                    f.applyMissedChunk(level, chunkX, chunkZ);
-                }
-            }
+            applyChunk(level, chunkX, chunkZ, key, biomeChanged);
         }
     }
 

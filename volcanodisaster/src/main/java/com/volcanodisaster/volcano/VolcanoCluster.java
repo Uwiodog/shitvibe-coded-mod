@@ -1,7 +1,10 @@
 package com.volcanodisaster.volcano;
 
 import com.volcanodisaster.VolcanoConfig;
+import com.volcanodisaster.entity.VolcanicProjectile;
 import com.volcanodisaster.network.ModNetwork;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
@@ -28,6 +31,8 @@ public class VolcanoCluster {
     private static final int MAX_PROBES = 3;
     private static final int PROBE_TIMEOUT = 20 * 20;
     private static final int GREAT_FLOW_COOLDOWN = 20 * 60 * 8;
+    /** How much each step of /volcano cluster intensity (1-5) multiplies the cluster's activity. */
+    private static final double[] ACTIVITY_FACTORS = {0.35, 0.65, 1.0, 1.5, 2.2};
 
     final int id;
     final int cx;
@@ -42,6 +47,9 @@ public class VolcanoCluster {
 
     int age;
     boolean stopped;
+    /** 1-5, set with /volcano cluster intensity. */
+    int activity;
+    int showerTicksLeft;
     int spawnCooldown;
     int greatFlowCooldown;
     /** Vents opened so far; the first few erupt right away, the rest of the first batch wait their turn. */
@@ -49,9 +57,11 @@ public class VolcanoCluster {
     final List<Integer> vents = new ArrayList<>();
     final List<Integer> geysers = new ArrayList<>();
 
-    // Not saved: sites being looked at (their chunk is loading).
+    // Not saved: sites being looked at (their chunk is loading), and meteors in the air.
     private final List<long[]> probes = new ArrayList<>();
     private int failedProbes;
+    private final List<VolcanicProjectile> inFlight = new ArrayList<>();
+    private double meteorBudget;
 
     VolcanoCluster(int id, BlockPos center, int width, int ventTarget, int durationTicks, float intensity, long seed) {
         this.id = id;
@@ -63,6 +73,24 @@ public class VolcanoCluster {
         this.durationTicks = durationTicks;
         this.intensity = intensity;
         this.seed = seed;
+        this.activity = Mth.clamp(VolcanoConfig.CLUSTER_ACTIVITY.get(), 1, 5);
+    }
+
+    public int getActivity() {
+        return activity;
+    }
+
+    public void setActivity(int value) {
+        activity = Mth.clamp(value, 1, 5);
+    }
+
+    /** Multiplier for vent fire rates, flow odds, meteor showers and how fast new vents open. */
+    double factor() {
+        return ACTIVITY_FACTORS[Mth.clamp(activity, 1, 5) - 1];
+    }
+
+    public boolean isShowering() {
+        return showerTicksLeft > 0;
     }
 
     public int getId() {
@@ -134,8 +162,8 @@ public class VolcanoCluster {
                     spawnCooldown--;
                 } else {
                     startProbe(level, data, rand);
-                    // The first batch opens quickly; later replacements take 30-120 s to appear.
-                    spawnCooldown = opened < ventTarget ? 10 : 600 + rand.nextInt(1800);
+                    // The first batch opens quickly; later replacements take 30-120 s to appear (faster when more active).
+                    spawnCooldown = opened < ventTarget ? 10 : (int) ((600 + rand.nextInt(1800)) / factor());
                 }
             }
         } else if (!probes.isEmpty()) {
@@ -143,6 +171,60 @@ public class VolcanoCluster {
         }
 
         tickGreatFlow(level, data, rand);
+        tickMeteors(level, data, rand);
+    }
+
+    // ------------------------------------------------------------------ meteor showers
+
+    /**
+     * Meteors across the whole cluster: a steady trickle while any vent erupts, and every so often a
+     * shower of them for half a minute to a minute and a half.
+     */
+    private void tickMeteors(ServerLevel level, VolcanoData data, RandomSource rand) {
+        if (age % 10 == 0) {
+            Meteors.checkInFlight(level, inFlight);
+        }
+        boolean anyErupting = false;
+        for (int ventId : vents) {
+            Volcano v = data.byId(ventId);
+            if (v != null && v.getStage() == Volcano.Stage.ERUPTING) {
+                anyErupting = true;
+                break;
+            }
+        }
+        double f = factor();
+        double perTick = 0;
+        if (showerTicksLeft > 0) {
+            showerTicksLeft--;
+            perTick += VolcanoConfig.SHOWER_METEORS_PER_SECOND.get() * f / 20.0;
+        } else if (anyErupting && rand.nextDouble() < VolcanoConfig.SHOWERS_PER_DAY.get() * f / Volcano.TICKS_PER_DAY) {
+            startShower(level);
+        }
+        if (anyErupting) {
+            perTick += VolcanoConfig.CLUSTER_METEORS_PER_MINUTE.get() * f / 1200.0;
+        }
+        meteorBudget += perTick;
+        while (meteorBudget >= 1.0) {
+            meteorBudget -= 1.0;
+            double a = rand.nextDouble() * Math.PI * 2;
+            double d = (width / 2.0 + 100) * Math.sqrt(rand.nextDouble());
+            double x = cx + 0.5 + Math.cos(a) * d;
+            double z = cz + 0.5 + Math.sin(a) * d;
+            if (level.getWorldBorder().isWithinBounds(BlockPos.containing(x, baseY, z))) {
+                Meteors.drop(level, x, z, Meteors.randomSize(rand, showerTicksLeft > 0 ? 0.10 : 0.12), rand, inFlight);
+            }
+        }
+    }
+
+    /** Starts a meteor shower now (also used by /volcano cluster shower). */
+    void startShower(ServerLevel level) {
+        RandomSource rand = level.getRandom();
+        showerTicksLeft = 600 + rand.nextInt(1200);
+        double range = width / 2.0 + 300;
+        for (ServerPlayer player : Volcano.playersNear(level, cx, baseY, cz, range)) {
+            player.displayClientMessage(Component.literal("\u00a76\u00a7lMeteor shower!"), true);
+        }
+        level.playSound(null, cx + 0.5, baseY, cz + 0.5, SoundEvents.LIGHTNING_BOLT_THUNDER, SoundSource.WEATHER, 40.0F, 0.4F);
     }
 
     private void tickGreatFlow(ServerLevel level, VolcanoData data, RandomSource rand) {
@@ -164,7 +246,7 @@ public class VolcanoCluster {
         if (erupting < Math.max(1, Mth.ceil(ventTarget * VolcanoConfig.GREAT_FLOW_ACTIVE_FRACTION.get()))) {
             return;
         }
-        if (rand.nextDouble() < perDay / Volcano.TICKS_PER_DAY) {
+        if (rand.nextDouble() < perDay / Volcano.TICKS_PER_DAY * factor()) {
             triggerGreatFlow(level, data);
         }
     }
@@ -263,7 +345,8 @@ public class VolcanoCluster {
 
     private boolean placeSite(ServerLevel level, VolcanoData data, RandomSource rand, int x, int z, SiteSurvey survey) {
         int tolerance = VolcanoConfig.PLANE_TOLERANCE.get();
-        float strength = Mth.clamp(intensity + (rand.nextFloat() - 0.5F) * 10.0F, 1.0F, 20.0F);
+        // Vents are randomly weaker or stronger than the cluster's average; more active clusters have stronger vents.
+        float strength = Mth.clamp(intensity + (activity - 3) * 2.5F + (rand.nextFloat() - 0.5F) * 10.0F, 1.0F, 20.0F);
         double minDays = VolcanoConfig.VENT_MIN_DAYS.get();
         double maxDays = Math.max(minDays, VolcanoConfig.VENT_MAX_DAYS.get());
         int life = (int) ((minDays + rand.nextDouble() * (maxDays - minDays)) * Volcano.TICKS_PER_DAY);
@@ -370,6 +453,8 @@ public class VolcanoCluster {
         tag.putInt("SpawnCooldown", spawnCooldown);
         tag.putInt("GreatCooldown", greatFlowCooldown);
         tag.putInt("Opened", opened);
+        tag.putInt("Activity", activity);
+        tag.putInt("Shower", showerTicksLeft);
         tag.putIntArray("VentIds", vents.stream().mapToInt(Integer::intValue).toArray());
         tag.putIntArray("GeyserIds", geysers.stream().mapToInt(Integer::intValue).toArray());
         return tag;
@@ -383,6 +468,10 @@ public class VolcanoCluster {
         c.spawnCooldown = tag.getInt("SpawnCooldown");
         c.greatFlowCooldown = tag.getInt("GreatCooldown");
         c.opened = tag.getInt("Opened");
+        if (tag.contains("Activity")) {
+            c.activity = Mth.clamp(tag.getInt("Activity"), 1, 5);
+        }
+        c.showerTicksLeft = tag.getInt("Shower");
         for (int v : tag.getIntArray("VentIds")) {
             c.vents.add(v);
         }
@@ -408,8 +497,8 @@ public class VolcanoCluster {
                 case COOLING, DONE -> cooling++;
             }
         }
-        return erupting + " erupting, " + waiting + " waking up, " + cooling + " cooling, "
-                + geysers.size() + " geyser" + (geysers.size() == 1 ? "" : "s");
+        return "intensity " + activity + "/5, " + erupting + " erupting, " + waiting + " waking up, " + cooling + " cooling, "
+                + geysers.size() + " geyser" + (geysers.size() == 1 ? "" : "s") + (showerTicksLeft > 0 ? ", METEOR SHOWER" : "");
     }
 
     /** Vents ordered nearest-first, for the info command. */

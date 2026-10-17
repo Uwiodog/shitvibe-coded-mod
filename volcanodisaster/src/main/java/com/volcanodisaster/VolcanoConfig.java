@@ -50,6 +50,10 @@ public final class VolcanoConfig {
     public static final ForgeConfigSpec.IntValue CLUSTER_VENTS;
     public static final ForgeConfigSpec.DoubleValue CLUSTER_DAYS;
     public static final ForgeConfigSpec.IntValue CLUSTER_INTENSITY;
+    public static final ForgeConfigSpec.IntValue CLUSTER_ACTIVITY;
+    public static final ForgeConfigSpec.DoubleValue CLUSTER_METEORS_PER_MINUTE;
+    public static final ForgeConfigSpec.DoubleValue SHOWERS_PER_DAY;
+    public static final ForgeConfigSpec.DoubleValue SHOWER_METEORS_PER_SECOND;
     public static final ForgeConfigSpec.DoubleValue VENT_MIN_DAYS;
     public static final ForgeConfigSpec.DoubleValue VENT_MAX_DAYS;
     public static final ForgeConfigSpec.DoubleValue VENT_RATE;
@@ -86,6 +90,7 @@ public final class VolcanoConfig {
     public static final ForgeConfigSpec.IntValue REMOTE_BURN_SECONDS;
     public static final ForgeConfigSpec.IntValue MAX_REMOTE_CHUNKS;
     public static final ForgeConfigSpec.BooleanValue KEEP_VOLCANO_LOADED;
+    public static final ForgeConfigSpec.DoubleValue CATCH_UP_CHUNKS_PER_SECOND;
 
     static {
         ForgeConfigSpec.Builder b = new ForgeConfigSpec.Builder();
@@ -168,6 +173,15 @@ public final class VolcanoConfig {
                 .defineInRange("days", 5.0, 0.0, 100.0);
         CLUSTER_INTENSITY = b.comment("Average strength (1-20) of the cluster's vents; each vent is randomly stronger or weaker.")
                 .defineInRange("intensity", 8, 1, 20);
+        CLUSTER_ACTIVITY = b.comment("How active a new cluster is, 1-5 (change it in game with /volcano cluster intensity). Scales vent fire rates, vent strength,",
+                        "pyroclastic flow odds, meteor showers and how fast new vents open: 1 = x0.35, 2 = x0.65, 3 = normal, 4 = x1.5, 5 = x2.2.")
+                .defineInRange("activity", 3, 1, 5);
+        CLUSTER_METEORS_PER_MINUTE = b.comment("Meteors per minute falling anywhere in the cluster while any vent erupts (at activity 3).")
+                .defineInRange("meteorsPerMinute", 4.0, 0.0, 600.0);
+        SHOWERS_PER_DAY = b.comment("Meteor showers per in-game day (at activity 3). A shower lasts 30-90 seconds.")
+                .defineInRange("meteorShowersPerDay", 4.0, 0.0, 100.0);
+        SHOWER_METEORS_PER_SECOND = b.comment("Meteors per second during a meteor shower (at activity 3), spread over the whole cluster.")
+                .defineInRange("showerMeteorsPerSecond", 1.5, 0.0, 100.0);
         VENT_MIN_DAYS = b.comment("Shortest eruption of a single vent, in in-game days.")
                 .defineInRange("ventMinDays", 0.25, 0.01, 100.0);
         VENT_MAX_DAYS = b.comment("Longest eruption of a single vent, in in-game days.")
@@ -176,7 +190,7 @@ public final class VolcanoConfig {
                 .defineInRange("ventRate", 0.6, 0.0, 5.0);
         DISTANT_VENT_RATE = b.comment("Extra multiplier for the fire-bomb barrage of vents with no player within 256 blocks. They keep wrecking the area, just slower and cheaper.")
                 .defineInRange("distantVentRate", 0.25, 0.0, 1.0);
-        VENT_BOMBARDMENT_RADIUS = b.comment("Meteor bombardment radius around each vent (the cluster vents cover the area between them).")
+        VENT_BOMBARDMENT_RADIUS = b.comment("How far around each vent ash settles. (Cluster vents don't throw their own meteors; the cluster's meteor showers cover the whole area.)")
                 .defineInRange("ventBombardmentRadius", 250, 50, 3000);
         VENT_FLOW_RADIUS = b.comment("Reach of a single vent's (local) pyroclastic flow.")
                 .defineInRange("ventFlowRadius", 200, 32, 1500);
@@ -237,6 +251,10 @@ public final class VolcanoConfig {
                 .defineInRange("maxLoadedChunks", 64, 1, 1024);
         KEEP_VOLCANO_LOADED = b.comment("Keep the volcano area loaded and running even when you fly far away.")
                 .define("keepVolcanoLoaded", true);
+        CATCH_UP_CHUNKS_PER_SECOND = b.comment("Pyroclastic flows and the Ashfall biome can only change chunks that are loaded at the time. Chunks they skipped are",
+                        "loaded quietly in the background this many per second and finished off, so there are no untouched patches left.",
+                        "Only chunks that already exist in your save are loaded (nothing new is generated into the void around a map). 0 = off.")
+                .defineInRange("catchUpChunksPerSecond", 8.0, 0.0, 200.0);
         b.pop();
 
         SPEC = b.build();

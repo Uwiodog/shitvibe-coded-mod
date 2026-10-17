@@ -256,6 +256,26 @@ public class PyroclasticFlow {
         return missed.contains(chunkKey);
     }
 
+    /**
+     * A chunk the front passed while it was unloaded, for the background catch-up to load. Chunks
+     * that were never generated (void around a map) are dropped instead of being generated.
+     */
+    Long nextMissed(ServerLevel level, Set<Long> busy) {
+        java.util.Iterator<Long> it = missed.iterator();
+        for (int checks = 0; checks < 64 && it.hasNext(); checks++) {
+            long key = it.next();
+            if (busy.contains(key)) {
+                continue;
+            }
+            if (!RegionFiles.chunkExists(level, ChunkPos.getX(key), ChunkPos.getZ(key))) {
+                it.remove();
+                continue;
+            }
+            return key;
+        }
+        return null;
+    }
+
     private void hurtEntities(ServerLevel level, RandomSource rand) {
         if (ticks % 2 != 0) {
             return;
