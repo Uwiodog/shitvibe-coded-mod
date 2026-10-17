@@ -6,6 +6,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.volcanodisaster.volcano.Volcano;
+import com.volcanodisaster.volcano.VolcanoCluster;
 import com.volcanodisaster.volcano.VolcanoData;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -19,6 +20,8 @@ import java.util.List;
 
 /**
  * /volcano spawn [pos] [intensity 1-20] [days]
+ * /volcano spawn cluster [pos] [width] [vents] [days]
+ * /volcano cluster list | info [id] | flow [id] | stop [id|all] | remove [id|all]
  * /volcano list | intensity <1-20> [id] | skip [id] | flow [id] | stop [id|all] | remove [id|all] | ashzones clear
  * plus /disaster spawn volcano [pos] and /disaster skip volcano [pos] like the old mod.
  */
@@ -29,6 +32,20 @@ public final class VolcanoCommand {
         dispatcher.register(Commands.literal("volcano")
                 .requires(s -> s.hasPermission(2))
                 .then(Commands.literal("spawn")
+                        .then(Commands.literal("cluster")
+                                .executes(ctx -> spawnCluster(ctx.getSource(), here(ctx.getSource()), -1, -1, -1))
+                                .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                                        .executes(ctx -> spawnCluster(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"), -1, -1, -1))
+                                        .then(Commands.argument("width", IntegerArgumentType.integer(500, 3000))
+                                                .executes(ctx -> spawnCluster(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"),
+                                                        IntegerArgumentType.getInteger(ctx, "width"), -1, -1))
+                                                .then(Commands.argument("vents", IntegerArgumentType.integer(5, 20))
+                                                        .executes(ctx -> spawnCluster(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"),
+                                                                IntegerArgumentType.getInteger(ctx, "width"), IntegerArgumentType.getInteger(ctx, "vents"), -1))
+                                                        .then(Commands.argument("days", FloatArgumentType.floatArg(0.0F, 100.0F))
+                                                                .executes(ctx -> spawnCluster(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"),
+                                                                        IntegerArgumentType.getInteger(ctx, "width"), IntegerArgumentType.getInteger(ctx, "vents"),
+                                                                        FloatArgumentType.getFloat(ctx, "days"))))))))
                         .executes(ctx -> spawn(ctx.getSource(), here(ctx.getSource()), -1, -1))
                         .then(Commands.argument("pos", BlockPosArgument.blockPos())
                                 .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"), -1, -1))
@@ -70,7 +87,30 @@ public final class VolcanoCommand {
                                 .executes(ctx -> remove(ctx.getSource(), single(byId(ctx))))))
                 .then(Commands.literal("ashzones")
                         .then(Commands.literal("clear")
-                                .executes(ctx -> clearAshZones(ctx.getSource())))));
+                                .executes(ctx -> clearAshZones(ctx.getSource()))))
+                .then(Commands.literal("cluster")
+                        .then(Commands.literal("list")
+                                .executes(ctx -> listClusters(ctx.getSource())))
+                        .then(Commands.literal("info")
+                                .executes(ctx -> clusterInfo(ctx.getSource(), nearestCluster(ctx.getSource())))
+                                .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                        .executes(ctx -> clusterInfo(ctx.getSource(), clusterById(ctx)))))
+                        .then(Commands.literal("flow")
+                                .executes(ctx -> greatFlow(ctx.getSource(), nearestCluster(ctx.getSource())))
+                                .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                        .executes(ctx -> greatFlow(ctx.getSource(), clusterById(ctx)))))
+                        .then(Commands.literal("stop")
+                                .executes(ctx -> stopClusters(ctx.getSource(), singleCluster(nearestCluster(ctx.getSource()))))
+                                .then(Commands.literal("all")
+                                        .executes(ctx -> stopClusters(ctx.getSource(), new ArrayList<>(data(ctx.getSource()).allClusters()))))
+                                .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                        .executes(ctx -> stopClusters(ctx.getSource(), singleCluster(clusterById(ctx))))))
+                        .then(Commands.literal("remove")
+                                .executes(ctx -> removeClusters(ctx.getSource(), singleCluster(nearestCluster(ctx.getSource()))))
+                                .then(Commands.literal("all")
+                                        .executes(ctx -> removeClusters(ctx.getSource(), new ArrayList<>(data(ctx.getSource()).allClusters()))))
+                                .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                        .executes(ctx -> removeClusters(ctx.getSource(), singleCluster(clusterById(ctx))))))));
 
         // Same syntax as the old General Disasters command.
         dispatcher.register(Commands.literal("disaster")
@@ -116,6 +156,7 @@ public final class VolcanoCommand {
 
     private static int list(CommandSourceStack source) {
         List<Volcano> all = data(source).all();
+        listClusters(source);
         if (all.isEmpty()) {
             source.sendSuccess(() -> Component.literal("No active volcanoes in this dimension."), false);
             return 0;
@@ -127,7 +168,8 @@ public final class VolcanoCommand {
                 stage += ", intensity " + String.format("%.1f", v.getIntensity()) + "/20 " + v.trend()
                         + " (" + v.getActivity().name().toLowerCase() + ", usual " + Math.round(v.getStrength()) + ")";
             }
-            String text = "#" + v.getId() + "  " + c.getX() + " " + c.getY() + " " + c.getZ()
+            String text = "#" + v.getId() + (v.getClusterId() != 0 ? " (cluster #" + v.getClusterId() + ")" : "")
+                    + "  " + c.getX() + " " + c.getY() + " " + c.getZ()
                     + "  " + stage + " (" + v.timeLeft() + " left)";
             source.sendSuccess(() -> Component.literal(text), false);
         }
@@ -194,6 +236,110 @@ public final class VolcanoCommand {
         source.sendSuccess(() -> Component.literal("Stopped " + n + " ash zone(s) from spreading the Ashfall biome. "
                 + "Land that already turned into Ashfall stays that way."), true);
         return n;
+    }
+
+    // ------------------------------------------------------------------ clusters
+
+    private static int spawnCluster(CommandSourceStack source, BlockPos pos, int width, int vents, float days) {
+        ServerLevel level = source.getLevel();
+        VolcanoCluster c = VolcanoData.get(level).spawnCluster(level, pos, width, vents, days);
+        String length = c.timeLeft();
+        source.sendSuccess(() -> Component.literal("Volcanic cluster #" + c.getId() + " is waking up around "
+                + pos.getX() + " " + pos.getZ() + ": " + c.getVentTarget() + " vents across " + c.getWidth() + " blocks, new ones opening "
+                + (length.startsWith("until") ? length : "for " + length)
+                + ". Vents open near Y " + pos.getY() + ". See it with /volcano cluster info, unleash a great pyroclastic flow with /volcano cluster flow."), true);
+        return c.getId();
+    }
+
+    private static int listClusters(CommandSourceStack source) {
+        VolcanoData data = data(source);
+        List<VolcanoCluster> all = data.allClusters();
+        for (VolcanoCluster c : all) {
+            BlockPos p = c.getCenter();
+            String text = "Cluster #" + c.getId() + "  around " + p.getX() + " " + p.getZ() + ", " + c.getWidth() + " wide: "
+                    + data.clusterSummary(c) + " (" + c.timeLeft() + (c.timeLeft().startsWith("until") || c.isStopped() ? "" : " left") + ")";
+            source.sendSuccess(() -> Component.literal(text), false);
+        }
+        return all.size();
+    }
+
+    private static int clusterInfo(CommandSourceStack source, VolcanoCluster c) {
+        if (c == null) {
+            source.sendFailure(Component.literal("No volcanic cluster found."));
+            return 0;
+        }
+        VolcanoData data = data(source);
+        String head = "Cluster #" + c.getId() + ": " + data.clusterSummary(c) + ". Vents, nearest first:";
+        source.sendSuccess(() -> Component.literal(head), false);
+        int shown = 0;
+        for (Volcano v : data.clusterVents(c, here(source))) {
+            if (shown++ >= 12) {
+                break;
+            }
+            BlockPos p = v.getCenter();
+            String stage = v.getStage().name().toLowerCase();
+            if (v.getStage() == Volcano.Stage.ERUPTING) {
+                stage += " at " + String.format("%.1f", v.getIntensity()) + "/20";
+            }
+            String line = "  #" + v.getId() + "  " + p.getX() + " " + p.getY() + " " + p.getZ() + "  " + stage + " (" + v.timeLeft() + " left)";
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+        return 1;
+    }
+
+    private static int greatFlow(CommandSourceStack source, VolcanoCluster c) {
+        if (c == null) {
+            source.sendFailure(Component.literal("No volcanic cluster found."));
+            return 0;
+        }
+        if (!data(source).startGreatFlow(source.getLevel(), c)) {
+            source.sendFailure(Component.literal("Cluster #" + c.getId() + " already has a great pyroclastic flow going."));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("Cluster #" + c.getId() + " is building up to a GREAT pyroclastic flow..."), true);
+        return 1;
+    }
+
+    private static int stopClusters(CommandSourceStack source, List<VolcanoCluster> targets) {
+        if (targets.isEmpty()) {
+            source.sendFailure(Component.literal("No volcanic cluster found."));
+            return 0;
+        }
+        for (VolcanoCluster c : targets) {
+            data(source).stopCluster(source.getLevel(), c);
+        }
+        int n = targets.size();
+        source.sendSuccess(() -> Component.literal("Stopped " + n + " cluster(s): no new vents, and the erupting ones are cooling down."), true);
+        return n;
+    }
+
+    private static int removeClusters(CommandSourceStack source, List<VolcanoCluster> targets) {
+        if (targets.isEmpty()) {
+            source.sendFailure(Component.literal("No volcanic cluster found."));
+            return 0;
+        }
+        for (VolcanoCluster c : targets) {
+            data(source).removeCluster(source.getLevel(), c);
+        }
+        int n = targets.size();
+        source.sendSuccess(() -> Component.literal("Removed " + n + " cluster(s) and their vents. Lava already placed stays as it is."), true);
+        return n;
+    }
+
+    private static VolcanoCluster nearestCluster(CommandSourceStack source) {
+        return data(source).nearestCluster(here(source));
+    }
+
+    private static VolcanoCluster clusterById(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        return data(ctx.getSource()).clusterById(IntegerArgumentType.getInteger(ctx, "id"));
+    }
+
+    private static List<VolcanoCluster> singleCluster(VolcanoCluster c) {
+        List<VolcanoCluster> list = new ArrayList<>();
+        if (c != null) {
+            list.add(c);
+        }
+        return list;
     }
 
     private static VolcanoData data(CommandSourceStack source) {

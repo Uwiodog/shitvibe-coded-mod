@@ -45,6 +45,26 @@ public final class VolcanoConfig {
     public static final ForgeConfigSpec.BooleanValue FLOW_BLAST;
     public static final ForgeConfigSpec.DoubleValue FLOW_DAMAGE;
 
+    // Volcanic cluster
+    public static final ForgeConfigSpec.IntValue CLUSTER_WIDTH;
+    public static final ForgeConfigSpec.IntValue CLUSTER_VENTS;
+    public static final ForgeConfigSpec.DoubleValue CLUSTER_DAYS;
+    public static final ForgeConfigSpec.IntValue CLUSTER_INTENSITY;
+    public static final ForgeConfigSpec.DoubleValue VENT_MIN_DAYS;
+    public static final ForgeConfigSpec.DoubleValue VENT_MAX_DAYS;
+    public static final ForgeConfigSpec.DoubleValue VENT_RATE;
+    public static final ForgeConfigSpec.DoubleValue DISTANT_VENT_RATE;
+    public static final ForgeConfigSpec.IntValue VENT_BOMBARDMENT_RADIUS;
+    public static final ForgeConfigSpec.IntValue VENT_FLOW_RADIUS;
+    public static final ForgeConfigSpec.IntValue PLANE_TOLERANCE;
+    public static final ForgeConfigSpec.BooleanValue GEYSERS;
+    public static final ForgeConfigSpec.DoubleValue GREAT_FLOWS_PER_DAY;
+    public static final ForgeConfigSpec.DoubleValue GREAT_FLOW_ACTIVE_FRACTION;
+    public static final ForgeConfigSpec.IntValue GREAT_FLOW_MIN_REACH;
+    public static final ForgeConfigSpec.IntValue GREAT_FLOW_MAX_REACH;
+    public static final ForgeConfigSpec.IntValue GREAT_FLOW_HEIGHT;
+    public static final ForgeConfigSpec.DoubleValue GREAT_FLOW_DAMAGE;
+
     // Ash biome + client effects
     public static final ForgeConfigSpec.IntValue ASH_BIOME_RADIUS;
     public static final ForgeConfigSpec.BooleanValue ASH_FOG;
@@ -134,8 +154,49 @@ public final class VolcanoConfig {
                 .defineInRange("buildupSeconds", 12, 0, 120);
         FLOW_BLAST = b.comment("Close to the volcano the flow knocks down weak blocks (wood, glass, wool, dirt, sand...). Stone, brick, concrete, terracotta and quartz survive.")
                 .define("blast", true);
-        FLOW_DAMAGE = b.comment("Damage dealt to mobs and players (not in creative) caught in the flow, plus setting them on fire.")
-                .defineInRange("damage", 12.0, 0.0, 1000.0);
+        FLOW_DAMAGE = b.comment("Damage dealt to mobs and players (not in creative) caught in the flow, on top of burning, blindness and slowness.")
+                .defineInRange("damage", 20.0, 0.0, 1000.0);
+        b.pop();
+
+        b.comment("Volcanic cluster (/volcano spawn cluster): many vents scattered over a wide area. Vents erupt at different times,",
+                "cool down, and new ones open up elsewhere. Water sites become geysers.").push("cluster");
+        CLUSTER_WIDTH = b.comment("Default width (diameter) of the cluster area in blocks.")
+                .defineInRange("width", 1500, 500, 3000);
+        CLUSTER_VENTS = b.comment("How many vents the cluster keeps going at once (0 = automatic: about one per 150 blocks of width, between 5 and 20).")
+                .defineInRange("vents", 0, 0, 20);
+        CLUSTER_DAYS = b.comment("How many in-game days the cluster keeps opening new vents (0 = until you stop it). Running vents finish on their own afterwards.")
+                .defineInRange("days", 5.0, 0.0, 100.0);
+        CLUSTER_INTENSITY = b.comment("Average strength (1-20) of the cluster's vents; each vent is randomly stronger or weaker.")
+                .defineInRange("intensity", 8, 1, 20);
+        VENT_MIN_DAYS = b.comment("Shortest eruption of a single vent, in in-game days.")
+                .defineInRange("ventMinDays", 0.25, 0.01, 100.0);
+        VENT_MAX_DAYS = b.comment("Longest eruption of a single vent, in in-game days.")
+                .defineInRange("ventMaxDays", 1.25, 0.01, 100.0);
+        VENT_RATE = b.comment("Fire bombs and meteors of each vent compared to a single volcano (keeps many vents from melting your PC).")
+                .defineInRange("ventRate", 0.6, 0.0, 5.0);
+        DISTANT_VENT_RATE = b.comment("Extra multiplier for the fire-bomb barrage of vents with no player within 256 blocks. They keep wrecking the area, just slower and cheaper.")
+                .defineInRange("distantVentRate", 0.25, 0.0, 1.0);
+        VENT_BOMBARDMENT_RADIUS = b.comment("Meteor bombardment radius around each vent (the cluster vents cover the area between them).")
+                .defineInRange("ventBombardmentRadius", 250, 50, 3000);
+        VENT_FLOW_RADIUS = b.comment("Reach of a single vent's (local) pyroclastic flow.")
+                .defineInRange("ventFlowRadius", 200, 32, 1500);
+        PLANE_TOLERANCE = b.comment("Vents open near the height you ran the command at: within this many blocks up or down. Sites far above or below (hills, canyons) are skipped,",
+                        "and sites a bit off are cut into the slope at the edge of this band. Ground height is measured under the streets, not on rooftops.")
+                .defineInRange("planeTolerance", 16, 2, 128);
+        GEYSERS = b.comment("Vent sites on water (sea, lakes, rivers) become geysers: boiling jets of water and steam that throw things into the air.")
+                .define("geysers", true);
+        GREAT_FLOWS_PER_DAY = b.comment("Great pyroclastic flows per in-game day while enough of the cluster is erupting (0 = only with /volcano cluster flow).")
+                .defineInRange("greatFlowsPerDay", 1.5, 0.0, 50.0);
+        GREAT_FLOW_ACTIVE_FRACTION = b.comment("Fraction of the cluster's vents that must be erupting before a great flow can happen on its own.")
+                .defineInRange("greatFlowActiveFraction", 0.5, 0.0, 1.0);
+        GREAT_FLOW_MIN_REACH = b.comment("Shortest reach of a great pyroclastic flow.")
+                .defineInRange("greatFlowMinReach", 300, 50, 2000);
+        GREAT_FLOW_MAX_REACH = b.comment("Longest reach of a great pyroclastic flow.")
+                .defineInRange("greatFlowMaxReach", 500, 50, 2000);
+        GREAT_FLOW_HEIGHT = b.comment("Height of a great flow's ash cloud near its source.")
+                .defineInRange("greatFlowHeight", 40, 4, 160);
+        GREAT_FLOW_DAMAGE = b.comment("Damage dealt by a great flow (survival players have 20 health).")
+                .defineInRange("greatFlowDamage", 40.0, 0.0, 1000.0);
         b.pop();
 
         b.comment("Ash sky: the land around the volcano becomes the 'Ashfall' biome (dark sky, falling ash, grey grass, thick haze).").push("ashBiome");

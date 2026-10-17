@@ -10,6 +10,8 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ChunkPos;
@@ -40,6 +42,9 @@ public class PyroclasticFlow {
     final int height;
     final int buildupTicks;
     final long seed;
+    final float damage;
+    /** Non-zero for a cluster's great flow. */
+    final int clusterId;
 
     Stage stage = Stage.BUILDUP;
     int ticks;
@@ -51,7 +56,7 @@ public class PyroclasticFlow {
     private final double p3;
 
     PyroclasticFlow(int volcanoId, int cx, int cy, int cz, double rim, double maxReach, double speed,
-                    int height, int buildupTicks, long seed) {
+                    int height, int buildupTicks, long seed, float damage, int clusterId) {
         this.volcanoId = volcanoId;
         this.cx = cx;
         this.cy = cy;
@@ -62,6 +67,8 @@ public class PyroclasticFlow {
         this.height = height;
         this.buildupTicks = buildupTicks;
         this.seed = seed;
+        this.damage = damage;
+        this.clusterId = clusterId;
         this.front = rim;
         RandomSource r = RandomSource.create(seed);
         this.p1 = r.nextDouble() * Math.PI * 2;
@@ -74,6 +81,10 @@ public class PyroclasticFlow {
         double n = 0.5 + 0.30 * Math.sin(2 * angle + p1) + 0.15 * Math.sin(5 * angle + p2) + 0.05 * Math.sin(11 * angle + p3);
         n = Mth.clamp(n, 0.0, 1.0);
         return rim + (maxReach - rim) * (0.45 + 0.55 * n);
+    }
+
+    boolean isGreat() {
+        return clusterId != 0;
     }
 
     boolean isFinished() {
@@ -96,8 +107,8 @@ public class PyroclasticFlow {
         double progress = buildupTicks <= 0 ? 1.0 : ticks / (double) buildupTicks;
 
         // Scorch the ground around the caldera, harder as the build-up goes on.
-        double scorchR = rim + 50;
-        int columns = 60 + (int) (100 * progress);
+        double scorchR = rim + (isGreat() ? 120 : 50);
+        int columns = (isGreat() ? 120 : 60) + (int) ((isGreat() ? 200 : 100) * progress);
         for (int i = 0; i < columns; i++) {
             double a = rand.nextDouble() * Math.PI * 2;
             double d = rim + (scorchR - rim) * Math.sqrt(rand.nextDouble());
@@ -109,7 +120,7 @@ public class PyroclasticFlow {
         if (ticks % Math.max(4, 16 - (int) (12 * progress)) == 0) {
             level.playSound(null, cx + 0.5, cy, cz + 0.5, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS,
                     10.0F + 10.0F * (float) progress, 0.3F + 0.25F * (float) progress);
-            ModNetwork.shakeAround(level, cx, cy, cz, 260, 0.2F + 0.6F * (float) progress);
+            ModNetwork.shakeAround(level, cx, cy, cz, isGreat() ? 700 : 260, 0.2F + (isGreat() ? 1.0F : 0.6F) * (float) progress);
         }
         if (ticks % 2 == 0) {
             for (ServerPlayer player : Volcano.playersNear(level, cx, cy, cz, 700)) {
@@ -122,7 +133,7 @@ public class PyroclasticFlow {
                 }
             }
         }
-        if (VolcanoConfig.VOLCANIC_LIGHTNING.get() && rand.nextInt(14) == 0) {
+        if (VolcanoConfig.VOLCANIC_LIGHTNING.get() && rand.nextInt(isGreat() ? 5 : 14) == 0) {
             Volcano.lightningNear(level, cx, cy, cz, rim * 2.5, rand);
         }
 
@@ -135,9 +146,10 @@ public class PyroclasticFlow {
 
     /** The eruption column collapses. */
     private void boom(ServerLevel level, RandomSource rand) {
-        level.playSound(null, cx + 0.5, cy, cz + 0.5, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 40.0F, 0.3F);
-        level.playSound(null, cx + 0.5, cy, cz + 0.5, SoundEvents.LIGHTNING_BOLT_THUNDER, SoundSource.WEATHER, 40.0F, 0.5F);
-        ModNetwork.shakeAround(level, cx, cy, cz, 600, 2.0F);
+        float volume = isGreat() ? 70.0F : 40.0F;
+        level.playSound(null, cx + 0.5, cy, cz + 0.5, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, volume, 0.3F);
+        level.playSound(null, cx + 0.5, cy, cz + 0.5, SoundEvents.LIGHTNING_BOLT_THUNDER, SoundSource.WEATHER, volume, 0.5F);
+        ModNetwork.shakeAround(level, cx, cy, cz, isGreat() ? 1100 : 600, isGreat() ? 3.0F : 2.0F);
         for (ServerPlayer player : Volcano.playersNear(level, cx, cy, cz, 800)) {
             for (int i = 0; i < 16; i++) {
                 double a = i / 16.0 * Math.PI * 2;
@@ -147,9 +159,10 @@ public class PyroclasticFlow {
             Fx.far(player, ParticleTypes.LAVA, cx + 0.5, cy + 2.0, cz + 0.5, 120, rim * 0.6, 2.0, rim * 0.6, 0.0);
         }
         // Blow out what's left right around the rim.
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < (isGreat() ? 12 : 6); i++) {
             double a = rand.nextDouble() * Math.PI * 2;
-            Impacts.impact(level, cx + 0.5 + Math.cos(a) * (rim + 4), cy + 1, cz + 0.5 + Math.sin(a) * (rim + 4), true, 1.3F, rand);
+            Impacts.impact(level, cx + 0.5 + Math.cos(a) * (rim + 4), cy + 1, cz + 0.5 + Math.sin(a) * (rim + 4), true,
+                    isGreat() ? 1.8F : 1.3F, rand);
         }
     }
 
@@ -249,7 +262,6 @@ public class PyroclasticFlow {
         }
         double r = front + 4;
         AABB box = new AABB(cx - r, cy - 24, cz - r, cx + r, cy + height + 24, cz + r);
-        float damage = VolcanoConfig.FLOW_DAMAGE.get().floatValue();
         for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, box)) {
             if (e instanceof Player p && (p.isCreative() || p.isSpectator())) {
                 continue;
@@ -264,10 +276,13 @@ public class PyroclasticFlow {
             if (e.getY() > Math.max(ground, cy) + height) {
                 continue;
             }
+            // Searing ash: burns, blinds, chokes.
             if (damage > 0) {
                 e.hurt(level.damageSources().inFire(), damage);
             }
-            e.setSecondsOnFire(10);
+            e.setSecondsOnFire(isGreat() ? 20 : 12);
+            e.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 100, 0));
+            e.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 140, 2));
             if (d > 0.1) {
                 e.push(dx / d * 0.8, 0.35, dz / d * 0.8);
                 e.hurtMarked = true;
@@ -340,6 +355,8 @@ public class PyroclasticFlow {
         tag.putString("Stage", stage.name());
         tag.putInt("Ticks", ticks);
         tag.putDouble("Front", front);
+        tag.putFloat("Damage", damage);
+        tag.putInt("Cluster", clusterId);
         long[] arr = new long[missed.size()];
         int i = 0;
         for (long l : missed) {
@@ -352,7 +369,8 @@ public class PyroclasticFlow {
     static PyroclasticFlow load(CompoundTag tag) {
         PyroclasticFlow f = new PyroclasticFlow(tag.getInt("Volcano"), tag.getInt("X"), tag.getInt("Y"), tag.getInt("Z"),
                 tag.getDouble("Rim"), tag.getDouble("MaxReach"), tag.getDouble("Speed"), tag.getInt("Height"),
-                tag.getInt("Buildup"), tag.getLong("Seed"));
+                tag.getInt("Buildup"), tag.getLong("Seed"),
+                tag.contains("Damage") ? tag.getFloat("Damage") : VolcanoConfig.FLOW_DAMAGE.get().floatValue(), tag.getInt("Cluster"));
         try {
             f.stage = Stage.valueOf(tag.getString("Stage"));
         } catch (IllegalArgumentException ex) {

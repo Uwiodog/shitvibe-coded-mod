@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Everything volcanic in one dimension - volcanoes, running pyroclastic flows and ash-biome zones -
+ * Everything volcanic in one dimension - volcanoes, clusters, geysers, running pyroclastic flows and ash-biome zones -
  * saved with the world so it all carries on after reloading.
  */
 public class VolcanoData extends SavedData {
@@ -35,6 +35,8 @@ public class VolcanoData extends SavedData {
     private final List<Volcano> volcanoes = new ArrayList<>();
     private final List<PyroclasticFlow> flows = new ArrayList<>();
     private final List<AshZone> ashZones = new ArrayList<>();
+    private final List<VolcanoCluster> clusters = new ArrayList<>();
+    private final List<Geyser> geysers = new ArrayList<>();
     private int nextId = 1;
 
     public static VolcanoData get(ServerLevel level) {
@@ -60,7 +62,7 @@ public class VolcanoData extends SavedData {
         float s = strength >= 1.0F ? strength : VolcanoConfig.DEFAULT_INTENSITY.get();
         Volcano v = new Volcano(nextId++, center, level.getRandom().nextLong(), s, eruptionTicks,
                 VolcanoConfig.CALDERA_RADIUS.get(), VolcanoConfig.CALDERA_DEPTH.get(),
-                VolcanoConfig.CLEAR_HEIGHT.get(), VolcanoConfig.MAX_SPILL_DISTANCE.get());
+                VolcanoConfig.CLEAR_HEIGHT.get(), VolcanoConfig.MAX_SPILL_DISTANCE.get(), 0, 0);
         volcanoes.add(v);
         int ashRadius = VolcanoConfig.ASH_BIOME_RADIUS.get();
         if (ashRadius > 0 && ashRadiusFor(center.getX(), center.getZ()) <= 0) {
@@ -68,6 +70,125 @@ public class VolcanoData extends SavedData {
         }
         setDirty();
         return v;
+    }
+
+    /** A vent belonging to a cluster (no ash zone of its own: the cluster has one big one). */
+    Volcano spawnVent(ServerLevel level, BlockPos center, float strength, int eruptionTicks, int clusterId, int dormantTicks) {
+        Volcano v = new Volcano(nextId++, center, level.getRandom().nextLong(), strength, eruptionTicks,
+                VolcanoConfig.CALDERA_RADIUS.get(), VolcanoConfig.CALDERA_DEPTH.get(),
+                VolcanoConfig.CLEAR_HEIGHT.get(), VolcanoConfig.MAX_SPILL_DISTANCE.get(), clusterId, dormantTicks);
+        volcanoes.add(v);
+        setDirty();
+        return v;
+    }
+
+    Geyser addGeyser(int clusterId, int x, int y, int z, float strength, int lifeTicks, net.minecraft.util.RandomSource rand) {
+        Geyser g = new Geyser(nextId++, clusterId, x, y, z, strength, lifeTicks, rand);
+        geysers.add(g);
+        setDirty();
+        return g;
+    }
+
+    Geyser geyserById(int id) {
+        for (Geyser g : geysers) {
+            if (g.id == id) {
+                return g;
+            }
+        }
+        return null;
+    }
+
+    void removeGeysers(int clusterId) {
+        geysers.removeIf(g -> g.clusterId == clusterId);
+        setDirty();
+    }
+
+    /**
+     * @param width   cluster width in blocks, or below 1 for the configured default
+     * @param vents   number of vents, or below 1 for the configured/automatic count
+     * @param days    how long new vents keep opening, below 0 for the configured default (0 = until stopped)
+     */
+    public VolcanoCluster spawnCluster(ServerLevel level, BlockPos center, int width, int vents, double days) {
+        int w = width >= 1 ? width : VolcanoConfig.CLUSTER_WIDTH.get();
+        int configured = VolcanoConfig.CLUSTER_VENTS.get();
+        int n = vents >= 1 ? vents : configured > 0 ? configured : VolcanoCluster.autoVentCount(w);
+        double d = days >= 0 ? days : VolcanoConfig.CLUSTER_DAYS.get();
+        VolcanoCluster c = new VolcanoCluster(nextId++, center, w, n, (int) Math.round(d * Volcano.TICKS_PER_DAY),
+                VolcanoConfig.CLUSTER_INTENSITY.get(), level.getRandom().nextLong());
+        clusters.add(c);
+        // One big Ashfall area covering the whole cluster.
+        int ashMargin = VolcanoConfig.ASH_BIOME_RADIUS.get();
+        if (ashMargin > 0) {
+            ashZones.add(new AshZone(center.getX(), center.getZ(), w / 2 + ashMargin / 2));
+        }
+        setDirty();
+        return c;
+    }
+
+    public List<VolcanoCluster> allClusters() {
+        return Collections.unmodifiableList(clusters);
+    }
+
+    public VolcanoCluster clusterById(int id) {
+        for (VolcanoCluster c : clusters) {
+            if (c.id == id) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    public VolcanoCluster nearestCluster(BlockPos pos) {
+        VolcanoCluster best = null;
+        double bestSq = Double.MAX_VALUE;
+        for (VolcanoCluster c : clusters) {
+            double d = c.getCenter().distSqr(pos);
+            if (d < bestSq) {
+                bestSq = d;
+                best = c;
+            }
+        }
+        return best;
+    }
+
+    public boolean startGreatFlow(ServerLevel level, VolcanoCluster c) {
+        boolean ok = c.triggerGreatFlow(level, this);
+        setDirty();
+        return ok;
+    }
+
+    public void stopCluster(ServerLevel level, VolcanoCluster c) {
+        c.stop(level, this);
+        setDirty();
+    }
+
+    /** Removes the cluster and all its vents and geysers immediately (lava stays as it is). */
+    public void removeCluster(ServerLevel level, VolcanoCluster c) {
+        c.stop(level, this);
+        for (Volcano v : new ArrayList<>(volcanoes)) {
+            if (v.clusterId == c.id) {
+                remove(level, v);
+            }
+        }
+        clusters.remove(c);
+        setDirty();
+    }
+
+    public String clusterSummary(VolcanoCluster c) {
+        return c.summary(this);
+    }
+
+    public List<Volcano> clusterVents(VolcanoCluster c, BlockPos from) {
+        return c.ventsByDistance(this, from);
+    }
+
+    boolean hasActiveGreatFlow(int clusterId) {
+        for (PyroclasticFlow f : flows) {
+            if (f.clusterId == clusterId && f.stage != PyroclasticFlow.Stage.DONE) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public Volcano byId(int id) {
@@ -134,9 +255,18 @@ public class VolcanoData extends SavedData {
         List<ChunkAccess> biomeChanged = new ArrayList<>();
         handleLoadedChunks(level, biomeChanged);
 
-        if (volcanoes.isEmpty() && flows.isEmpty() && ashZones.isEmpty()) {
+        if (volcanoes.isEmpty() && flows.isEmpty() && ashZones.isEmpty() && clusters.isEmpty() && geysers.isEmpty()) {
             return;
         }
+
+        for (VolcanoCluster c : new ArrayList<>(clusters)) {
+            c.tick(level, this);
+        }
+        clusters.removeIf(VolcanoCluster::isFinished);
+        for (Geyser g : geysers) {
+            g.tick(level);
+        }
+        geysers.removeIf(Geyser::isFinished);
 
         for (AshZone zone : ashZones) {
             zone.sweep(level, biomeChanged);
@@ -212,6 +342,16 @@ public class VolcanoData extends SavedData {
             zoneList.add(z.save());
         }
         tag.put("AshZones", zoneList);
+        ListTag clusterList = new ListTag();
+        for (VolcanoCluster c : clusters) {
+            clusterList.add(c.save());
+        }
+        tag.put("Clusters", clusterList);
+        ListTag geyserList = new ListTag();
+        for (Geyser g : geysers) {
+            geyserList.add(g.save());
+        }
+        tag.put("Geysers", geyserList);
         tag.putInt("NextId", nextId);
         return tag;
     }
@@ -229,6 +369,14 @@ public class VolcanoData extends SavedData {
         ListTag zoneList = tag.getList("AshZones", Tag.TAG_COMPOUND);
         for (int i = 0; i < zoneList.size(); i++) {
             data.ashZones.add(AshZone.load(zoneList.getCompound(i)));
+        }
+        ListTag clusterList = tag.getList("Clusters", Tag.TAG_COMPOUND);
+        for (int i = 0; i < clusterList.size(); i++) {
+            data.clusters.add(VolcanoCluster.load(clusterList.getCompound(i)));
+        }
+        ListTag geyserList = tag.getList("Geysers", Tag.TAG_COMPOUND);
+        for (int i = 0; i < geyserList.size(); i++) {
+            data.geysers.add(Geyser.load(geyserList.getCompound(i)));
         }
         data.nextId = Math.max(1, tag.getInt("NextId"));
         return data;

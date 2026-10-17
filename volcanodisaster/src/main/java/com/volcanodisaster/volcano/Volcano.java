@@ -39,7 +39,7 @@ import java.util.List;
  * and is removed (DONE).
  */
 public class Volcano {
-    public enum Stage { FORMING, ERUPTING, COOLING, DONE }
+    public enum Stage { DORMANT, FORMING, ERUPTING, COOLING, DONE }
 
     /** Rough description of the current intensity. */
     public enum Activity { QUIET, ACTIVE, VIOLENT, PAROXYSM }
@@ -60,8 +60,12 @@ public class Volcano {
     final int depth;
     final int clearHeight;
     final int maxSpill;
+    /** The volcanic cluster this vent belongs to, 0 for a stand-alone volcano. */
+    final int clusterId;
 
     Stage stage = Stage.FORMING;
+    /** Ticks left before a waiting cluster vent wakes up. */
+    int dormantTicks;
     int stageTicks;
     int carveIndex;
     int coolIndex;
@@ -79,6 +83,7 @@ public class Volcano {
     private double bombBudget;
     private double meteorBudget;
     private double bombardmentBudget;
+    private boolean distant;
     private boolean ticketActive;
     private int ticketDistance;
     private List<int[]> carveColumns;
@@ -88,7 +93,7 @@ public class Volcano {
     private final double[] breaches;
 
     Volcano(int id, BlockPos center, long seed, float strength, int eruptionTicks,
-            int radius, int depth, int clearHeight, int maxSpill) {
+            int radius, int depth, int clearHeight, int maxSpill, int clusterId, int dormantTicks) {
         this.id = id;
         this.cx = center.getX();
         this.cy = center.getY();
@@ -102,6 +107,9 @@ public class Volcano {
         this.depth = depth;
         this.clearHeight = clearHeight;
         this.maxSpill = maxSpill;
+        this.clusterId = clusterId;
+        this.dormantTicks = dormantTicks;
+        this.stage = dormantTicks > 0 ? Stage.DORMANT : Stage.FORMING;
 
         RandomSource r = RandomSource.create(seed);
         this.phase1 = r.nextDouble() * Math.PI * 2;
@@ -117,6 +125,15 @@ public class Volcano {
 
     public int getId() {
         return id;
+    }
+
+    public int getClusterId() {
+        return clusterId;
+    }
+
+    /** Fire bombs and meteors are scaled down for cluster vents (there are many of them). */
+    private double ventFactor() {
+        return clusterId != 0 ? VolcanoConfig.VENT_RATE.get() : 1.0;
     }
 
     public Stage getStage() {
@@ -170,6 +187,7 @@ public class Volcano {
     /** "2.5 days", "14 min", "until stopped"... */
     public String timeLeft() {
         int ticks = switch (stage) {
+            case DORMANT -> dormantTicks + VolcanoConfig.FORMING_SECONDS.get() * 20;
             case FORMING -> Math.max(0, VolcanoConfig.FORMING_SECONDS.get() * 20 - stageTicks);
             case ERUPTING -> eruptionTicks <= 0 ? -1 : Math.max(0, eruptionTicks - stageTicks);
             case COOLING -> Math.max(0, COOLING_SETTLE_TICKS + coolingTicks() - stageTicks);
@@ -198,6 +216,10 @@ public class Volcano {
     /** Moves straight on to the next stage. FORMING finishes the caldera instantly. */
     public void skipStage(ServerLevel level) {
         switch (stage) {
+            case DORMANT -> {
+                dormantTicks = 0;
+                setStage(Stage.FORMING);
+            }
             case FORMING -> {
                 List<int[]> cols = columns();
                 RandomSource rand = level.getRandom();
@@ -215,7 +237,9 @@ public class Volcano {
 
     /** Ends the eruption and lets the lava harden. */
     public void stop() {
-        if (stage == Stage.FORMING || stage == Stage.ERUPTING) {
+        if (stage == Stage.DORMANT) {
+            setStage(Stage.DONE); // never opened, nothing to cool
+        } else if (stage == Stage.FORMING || stage == Stage.ERUPTING) {
             setStage(Stage.COOLING);
         }
     }
@@ -226,8 +250,10 @@ public class Volcano {
             return false;
         }
         int buildup = VolcanoConfig.FLOW_BUILDUP_SECONDS.get() * 20;
-        data.addFlow(new PyroclasticFlow(id, cx, cy, cz, rimRadius(), VolcanoConfig.FLOW_RADIUS.get(),
-                VolcanoConfig.FLOW_SPEED.get(), VolcanoConfig.FLOW_HEIGHT.get(), buildup, level.getRandom().nextLong()));
+        int reach = clusterId != 0 ? VolcanoConfig.VENT_FLOW_RADIUS.get() : VolcanoConfig.FLOW_RADIUS.get();
+        data.addFlow(new PyroclasticFlow(id, cx, cy, cz, rimRadius(), reach,
+                VolcanoConfig.FLOW_SPEED.get(), VolcanoConfig.FLOW_HEIGHT.get(), buildup, level.getRandom().nextLong(),
+                VolcanoConfig.FLOW_DAMAGE.get().floatValue(), 0));
         flowCooldown = FLOW_COOLDOWN_TICKS;
         firstFlowAt = -1;
         return true;
@@ -254,6 +280,7 @@ public class Volcano {
         updateTicket(level);
         stageTicks++;
         switch (stage) {
+            case DORMANT -> tickDormant(level, rand);
             case FORMING -> tickForming(level, rand);
             case ERUPTING -> tickErupting(level, data, rand);
             case COOLING -> tickCooling(level, rand);
@@ -261,6 +288,24 @@ public class Volcano {
         }
         if (stageTicks % 10 == 0) {
             checkInFlight(level);
+        }
+    }
+
+    /** A cluster vent waiting its turn: the ground just steams now and then. */
+    private void tickDormant(ServerLevel level, RandomSource rand) {
+        if (--dormantTicks <= 0) {
+            setStage(Stage.FORMING);
+            return;
+        }
+        if (stageTicks % 10 == 0 && level.getChunkSource().getChunkNow(cx >> 4, cz >> 4) != null) {
+            for (ServerPlayer player : playersNear(level, cx, cy, cz, 300)) {
+                Fx.far(player, ParticleTypes.CAMPFIRE_COSY_SMOKE, cx + 0.5 + (rand.nextDouble() - 0.5) * radius,
+                        cy + 1.0, cz + 0.5 + (rand.nextDouble() - 0.5) * radius, 0, 0.0, 0.05, 0.0, 1.0);
+            }
+            // The ground rumbles more often as it gets closer to opening.
+            if (dormantTicks < 1200 && rand.nextInt(6) == 0) {
+                level.playSound(null, cx + 0.5, cy, cz + 0.5, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 4.0F, 0.3F);
+            }
         }
     }
 
@@ -295,9 +340,14 @@ public class Volcano {
     private void tickErupting(ServerLevel level, VolcanoData data, RandomSource rand) {
         tickIntensity(level, rand);
         double rate = rate();
+        double vent = ventFactor();
+        if (clusterId != 0 && stageTicks % 20 == 0) {
+            distant = playersNear(level, cx, cy, cz, 256).isEmpty();
+        }
+        double barrage = rate * vent * (distant ? VolcanoConfig.DISTANT_VENT_RATE.get() : 1.0);
 
         // Close in: a dense barrage of fire bombs (and a few small meteors).
-        bombBudget += VolcanoConfig.BARRAGE_BOMBS_PER_SECOND.get() * rate / 20.0;
+        bombBudget += VolcanoConfig.BARRAGE_BOMBS_PER_SECOND.get() * barrage / 20.0;
         while (bombBudget >= 1.0) {
             bombBudget -= 1.0;
             double[] t = barrageTarget(level, rand);
@@ -305,7 +355,7 @@ public class Volcano {
                 launchFireBomb(level, rand, t);
             }
         }
-        meteorBudget += VolcanoConfig.BARRAGE_METEORS_PER_SECOND.get() * rate / 20.0;
+        meteorBudget += VolcanoConfig.BARRAGE_METEORS_PER_SECOND.get() * barrage / 20.0;
         while (meteorBudget >= 1.0) {
             meteorBudget -= 1.0;
             double[] t = barrageTarget(level, rand);
@@ -314,7 +364,7 @@ public class Volcano {
             }
         }
         // Further out: every now and then a meteor of random size somewhere across the city.
-        bombardmentBudget += VolcanoConfig.BOMBARDMENT_HITS_PER_MINUTE.get() * rate / 1200.0;
+        bombardmentBudget += VolcanoConfig.BOMBARDMENT_HITS_PER_MINUTE.get() * rate * vent / 1200.0;
         while (bombardmentBudget >= 1.0) {
             bombardmentBudget -= 1.0;
             double[] t = bombardmentTarget(level, rand);
@@ -459,11 +509,13 @@ public class Volcano {
 
     /** Ash settling over the Ashfall biome, thicker closer to the volcano. */
     private void ashfall(ServerLevel level, VolcanoData data, RandomSource rand) {
-        int ashRadius = data.ashRadiusFor(cx, cz);
+        int ashRadius = clusterId != 0
+                ? (VolcanoConfig.ASH_BIOME_RADIUS.get() > 0 ? VolcanoConfig.VENT_BOMBARDMENT_RADIUS.get() : 0)
+                : data.ashRadiusFor(cx, cz);
         if (ashRadius <= 0) {
             return;
         }
-        int columns = (int) Math.round(VolcanoConfig.ASHFALL_COLUMNS_PER_TICK.get() * rate());
+        int columns = (int) Math.round(VolcanoConfig.ASHFALL_COLUMNS_PER_TICK.get() * rate() * ventFactor());
         for (int i = 0; i < columns; i++) {
             double a = rand.nextDouble() * Math.PI * 2;
             double d = ashRadius * rand.nextDouble();
@@ -646,7 +698,8 @@ public class Volcano {
     /** Bombardment targets: anywhere from inside the barrage edge out to the bombardment radius, rarer further out. */
     private double[] bombardmentTarget(ServerLevel level, RandomSource rand) {
         double zone = VolcanoConfig.BARRAGE_RADIUS.get();
-        double far = Math.max(zone + 20, VolcanoConfig.BOMBARDMENT_RADIUS.get());
+        int radiusSetting = clusterId != 0 ? VolcanoConfig.VENT_BOMBARDMENT_RADIUS.get() : VolcanoConfig.BOMBARDMENT_RADIUS.get();
+        double far = Math.max(zone + 20, radiusSetting);
         double from = zone * 0.6;
         for (int tries = 0; tries < 6; tries++) {
             double[] t = at(level, from + (far - from) * rand.nextDouble(), rand);
@@ -811,10 +864,14 @@ public class Volcano {
 
     /** Keeps the caldera and spill area loaded and ticking so it keeps erupting while you're elsewhere. */
     private void updateTicket(ServerLevel level) {
-        boolean want = stage != Stage.DONE && VolcanoConfig.KEEP_VOLCANO_LOADED.get();
+        boolean want = stage != Stage.DONE && stage != Stage.DORMANT && VolcanoConfig.KEEP_VOLCANO_LOADED.get();
         if (want && !ticketActive) {
-            int reach = Mth.ceil(Math.max(rimRadius() + maxSpill, VolcanoConfig.SCORCH_RADIUS.get()));
-            ticketDistance = Mth.clamp(Mth.ceil(reach / 16.0) + 2, 2, 10);
+            if (clusterId != 0) {
+                ticketDistance = 3; // just the caldera and its rim: there are many vents
+            } else {
+                int reach = Mth.ceil(Math.max(rimRadius() + maxSpill, VolcanoConfig.SCORCH_RADIUS.get()));
+                ticketDistance = Mth.clamp(Mth.ceil(reach / 16.0) + 2, 2, 10);
+            }
             level.getChunkSource().addRegionTicket(TICKET, new ChunkPos(getCenter()), ticketDistance, id, true);
             ticketActive = true;
         } else if (!want && ticketActive) {
@@ -853,6 +910,8 @@ public class Volcano {
         tag.putInt("CoolIndex", coolIndex);
         tag.putInt("FirstFlowAt", firstFlowAt);
         tag.putInt("FlowCooldown", flowCooldown);
+        tag.putInt("Cluster", clusterId);
+        tag.putInt("Dormant", dormantTicks);
         return tag;
     }
 
@@ -862,7 +921,8 @@ public class Volcano {
         Volcano v = new Volcano(tag.getInt("Id"),
                 new BlockPos(tag.getInt("X"), tag.getInt("Y"), tag.getInt("Z")),
                 tag.getLong("Seed"), strength, tag.getInt("EruptionTicks"),
-                tag.getInt("Radius"), tag.getInt("Depth"), tag.getInt("ClearHeight"), tag.getInt("MaxSpill"));
+                tag.getInt("Radius"), tag.getInt("Depth"), tag.getInt("ClearHeight"), tag.getInt("MaxSpill"),
+                tag.getInt("Cluster"), tag.getInt("Dormant"));
         try {
             v.stage = Stage.valueOf(tag.getString("Stage"));
         } catch (IllegalArgumentException ex) {

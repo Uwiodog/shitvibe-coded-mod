@@ -36,6 +36,32 @@ A volcano you can drop into any world, made for wrecking city maps. Inspired by 
 5. **Cooling**: the caldera and spilled lava harden into obsidian, then the volcano is gone.
    The scorched land, the ash and the Ashfall biome stay.
 
+## Volcanic cluster
+
+`/volcano spawn cluster` turns a whole region into a volcanic field instead of one caldera:
+
+- **5 to 20 vents** spread over an area 500-3000 blocks wide (default 1500 wide with 10 vents;
+  about one vent per 150 blocks of width). They keep a sensible distance from each other.
+- **Same ground plane:** before a vent opens, its site is surveyed. The ground height is read under
+  the streets (not on rooftops). Vents open close to the height you ran the command at: ground a bit
+  higher or lower gets the caldera cut into the slope, and sites far above or below (hills, canyons)
+  are skipped.
+- **Geysers:** sites on water (sea, lakes, rivers) become geysers instead. They steam, then every
+  1-3 minutes blast a column of boiling water 20-75 blocks into the air, scalding and launching
+  anything (and any boat) above them. A ring of magma on the bottom drags swimmers down.
+- **Vents come and go:** two vents erupt right away, the rest wake up over the next few minutes.
+  Each vent erupts for 5-25 real minutes with its own strength, then cools to obsidian - and a new
+  vent opens somewhere else in the cluster. This goes on for 5 in-game days by default.
+- **Local pyroclastic flows** from each vent (about 200 blocks), and when **half the cluster is
+  erupting at once**, a **great pyroclastic flow**: every vent roars, the whole area shakes, and a
+  40-block-tall wall of ash sweeps 300-500 blocks out from the most violent vent, flattening
+  anything weak in the inner half. You can also unleash one with `/volcano cluster flow`.
+- **The whole cluster becomes Ashfall** (plus a margin around it). In survival the biome now spawns
+  magma cubes, blazes and husks; pyroclastic flows burn, blind and slow you on top of their damage.
+  On peaceful difficulty nothing spawns.
+- Vents far from any player keep wrecking their surroundings, just with a quarter of the fire-bomb barrage, so a
+  big cluster doesn't melt your PC.
+
 **Far-away destruction:** fire bombs and meteors aimed at places no player is near still land:
 the chunk is loaded, wrecked and kept burning for a while. Pyroclastic flows remember every chunk
 they passed that wasn't loaded and torch it the moment it loads. The ash biome also spreads into
@@ -53,6 +79,12 @@ chunks as they load.
 | `/volcano skip [id]` | Jump to the next stage (nearest volcano if no id) |
 | `/volcano stop [id\|all]` | End the eruption and let the lava harden |
 | `/volcano remove [id\|all]` | Delete it immediately, leaving the lava as it is |
+| `/volcano spawn cluster [x y z] [width] [vents] [days]` | Volcanic cluster centred here. `width` 500-3000, `vents` 5-20, `days` = how long new vents keep opening (0 = until stopped) |
+| `/volcano cluster list` | Clusters in this dimension and what their vents are doing |
+| `/volcano cluster info [id]` | A cluster's vents, nearest first, with position, stage and intensity |
+| `/volcano cluster flow [id]` | Unleash a great pyroclastic flow now |
+| `/volcano cluster stop [id\|all]` | No new vents; erupting ones cool down |
+| `/volcano cluster remove [id\|all]` | Delete the cluster and all its vents and geysers immediately |
 | `/volcano ashzones clear` | Stop the Ashfall biome from spreading into more chunks (already-converted land stays) |
 | `/disaster spawn volcano [x y z]`, `/disaster skip volcano [x y z]` | Same syntax as the old mod |
 
@@ -62,7 +94,12 @@ chunks as they load.
 `caldera`, `eruption` (days, default intensity, whether it varies, barrage radius and rate,
 bombardment radius and rate, blast sizes, lightning), `scorch`, `pyroclasticFlow` (flows per day,
 radius, speed, height, build-up time, damage), `ashBiome` (radius, haze, screen shake),
-`lavaSpill`, `cooling` and `unloadedChunks`.
+`lavaSpill`, `cooling`, `unloadedChunks`, and `cluster` (width, vent count, how long it lasts,
+vent strength and eruption length, vent rates, plane tolerance, geysers, great flow frequency, reach,
+height and damage).
+
+If you already have a config file from an older version, new settings are added automatically but
+changed defaults aren't: pyroclastic flow `damage` is now 20 for new configs (it was 12).
 
 ## Tips
 
@@ -82,7 +119,7 @@ radius, speed, height, build-up time, damage), `ashBiome` (radius, haze, screen 
 
 **On your PC:** install Java 17 (for example Temurin 17 from adoptium.net), open a terminal in this
 folder and run `gradlew build` (Windows) or `./gradlew build` (Mac/Linux). The first build downloads
-Minecraft and Forge and takes several minutes. The mod ends up in `build/libs/volcanodisaster-1.2.0.jar`;
+Minecraft and Forge and takes several minutes. The mod ends up in `build/libs/volcanodisaster-1.3.0.jar`;
 put it in your `.minecraft/mods` folder next to Forge 1.20.1.
 
 **Without installing anything:** make a new GitHub repository, upload all of these files (including
