@@ -22,6 +22,7 @@ public abstract class VolcanicProjectile extends Projectile implements ItemSuppl
     private static final int MAX_LIFE_TICKS = 600;
 
     private int life;
+    private float power = 1.0F;
     private double targetX;
     private double targetZ;
 
@@ -49,6 +50,15 @@ public abstract class VolcanicProjectile extends Projectile implements ItemSuppl
         this.targetZ = z + dz;
     }
 
+    /** Blast size multiplier (1 = normal). Only used on the server. */
+    public void setPower(float power) {
+        this.power = power;
+    }
+
+    public float getPower() {
+        return power;
+    }
+
     public double getTargetX() {
         return targetX;
     }
@@ -70,7 +80,7 @@ public abstract class VolcanicProjectile extends Projectile implements ItemSuppl
             HitResult hit = ProjectileUtil.getHitResultOnMoveVector(this, this::canHitEntity);
             if (hit.getType() != HitResult.Type.MISS && !ForgeEventFactory.onProjectileImpact(this, hit)) {
                 Vec3 at = hit.getLocation();
-                Impacts.impact((ServerLevel) this.level(), at.x, at.y, at.z, isMeteor(), this.random);
+                Impacts.impact((ServerLevel) this.level(), at.x, at.y, at.z, isMeteor(), power, this.random);
                 this.discard();
                 return;
             }

@@ -33,24 +33,16 @@ import java.util.List;
 
 /**
  * One volcano: a lava caldera whose surface sits at the spawn Y. It opens up (FORMING), erupts for
- * days in shifting phases - fire bombs, meteors, lava spills, a spreading scorched zone, ashfall and
- * now and then a pyroclastic flow (ERUPTING) - then hardens into obsidian (COOLING) and is removed (DONE).
+ * days with an intensity (1-20) that rises and falls like a real volcano: a fire-bomb barrage close to the
+ * caldera, a slow bombardment of random-sized meteors across the city, lava spills, a spreading scorched
+ * zone, ashfall and now and then a pyroclastic flow (ERUPTING). Then it hardens into obsidian (COOLING)
+ * and is removed (DONE).
  */
 public class Volcano {
     public enum Stage { FORMING, ERUPTING, COOLING, DONE }
 
-    /** How hard the volcano is going right now. */
-    public enum Activity {
-        SIMMERING(0.15, 0.3), ACTIVE(1.0, 0.8), FRENZY(2.5, 2.5);
-
-        final double rate;
-        final double flowFactor;
-
-        Activity(double rate, double flowFactor) {
-            this.rate = rate;
-            this.flowFactor = flowFactor;
-        }
-    }
+    /** Rough description of the current intensity. */
+    public enum Activity { QUIET, ACTIVE, VIOLENT, PAROXYSM }
 
     public static final int TICKS_PER_DAY = 24000;
     private static final TicketType<Integer> TICKET = TicketType.create("volcanodisaster:volcano", Integer::compare);
@@ -62,7 +54,6 @@ public class Volcano {
     final int cy;
     final int cz;
     final long seed;
-    final float intensity;
     /** Eruption length in ticks, 0 = until stopped. */
     final int eruptionTicks;
     final int radius;
@@ -74,8 +65,12 @@ public class Volcano {
     int stageTicks;
     int carveIndex;
     int coolIndex;
-    Activity activity = Activity.ACTIVE;
-    int activityTicksLeft;
+    /** The volcano's usual strength, 1-20. */
+    float strength;
+    /** Current intensity, 1-20; drifts towards {@link #target}. */
+    float intensity;
+    float target;
+    int episodeTicksLeft;
     /** Stage tick of the guaranteed first flow, -1 once it happened (or if flows are off). */
     int firstFlowAt = -1;
     int flowCooldown;
@@ -83,6 +78,7 @@ public class Volcano {
     // Not saved
     private double bombBudget;
     private double meteorBudget;
+    private double bombardmentBudget;
     private boolean ticketActive;
     private int ticketDistance;
     private List<int[]> carveColumns;
@@ -91,14 +87,16 @@ public class Volcano {
     private final double phase2;
     private final double[] breaches;
 
-    Volcano(int id, BlockPos center, long seed, float intensity, int eruptionTicks,
+    Volcano(int id, BlockPos center, long seed, float strength, int eruptionTicks,
             int radius, int depth, int clearHeight, int maxSpill) {
         this.id = id;
         this.cx = center.getX();
         this.cy = center.getY();
         this.cz = center.getZ();
         this.seed = seed;
-        this.intensity = intensity;
+        this.strength = Mth.clamp(strength, 1.0F, 20.0F);
+        this.intensity = this.strength;
+        this.target = this.strength;
         this.eruptionTicks = eruptionTicks;
         this.radius = radius;
         this.depth = depth;
@@ -126,7 +124,38 @@ public class Volcano {
     }
 
     public Activity getActivity() {
-        return activity;
+        if (intensity >= 17.0F) return Activity.PAROXYSM;
+        if (intensity >= 12.0F) return Activity.VIOLENT;
+        if (intensity >= 5.0F) return Activity.ACTIVE;
+        return Activity.QUIET;
+    }
+
+    /** Current intensity on the 1-20 scale. */
+    public float getIntensity() {
+        return intensity;
+    }
+
+    public float getStrength() {
+        return strength;
+    }
+
+    /** Whether the intensity is currently heading up or down (for /volcano list). */
+    public String trend() {
+        if (target > intensity + 0.75F) return "rising";
+        if (target < intensity - 0.75F) return "falling";
+        return "steady";
+    }
+
+    /** Sets the volcano's usual strength and moves the current intensity towards it. */
+    public void setStrength(float value) {
+        strength = Mth.clamp(value, 1.0F, 20.0F);
+        target = strength;
+        episodeTicksLeft = 2400 + (int) (Math.random() * 2400);
+    }
+
+    /** Rates are tuned for intensity 10; this is the multiplier for the current intensity. */
+    private double rate() {
+        return intensity / 10.0;
     }
 
     public BlockPos getCenter() {
@@ -211,8 +240,10 @@ public class Volcano {
 
     private void startEruption(RandomSource rand) {
         setStage(Stage.ERUPTING);
-        activity = Activity.ACTIVE;
-        activityTicksLeft = 2400 + rand.nextInt(2400);
+        // Opens up a bit below its usual strength and builds up to it.
+        intensity = Math.max(1.0F, strength * 0.6F);
+        target = strength;
+        episodeTicksLeft = 2400 + rand.nextInt(2400);
         firstFlowAt = VolcanoConfig.FLOWS_PER_DAY.get() > 0 ? 3600 + rand.nextInt(3600) : -1;
     }
 
@@ -262,24 +293,42 @@ public class Volcano {
     }
 
     private void tickErupting(ServerLevel level, VolcanoData data, RandomSource rand) {
-        tickActivity(level, rand);
-        double rate = intensity * activity.rate;
+        tickIntensity(level, rand);
+        double rate = rate();
 
-        bombBudget += VolcanoConfig.FIRE_BOMBS_PER_SECOND.get() * rate / 20.0;
+        // Close in: a dense barrage of fire bombs (and a few small meteors).
+        bombBudget += VolcanoConfig.BARRAGE_BOMBS_PER_SECOND.get() * rate / 20.0;
         while (bombBudget >= 1.0) {
             bombBudget -= 1.0;
-            launchFireBomb(level, rand);
+            double[] t = barrageTarget(level, rand);
+            if (t != null) {
+                launchFireBomb(level, rand, t);
+            }
         }
-        meteorBudget += VolcanoConfig.METEORS_PER_SECOND.get() * rate / 20.0;
+        meteorBudget += VolcanoConfig.BARRAGE_METEORS_PER_SECOND.get() * rate / 20.0;
         while (meteorBudget >= 1.0) {
             meteorBudget -= 1.0;
-            dropMeteor(level, rand);
+            double[] t = barrageTarget(level, rand);
+            if (t != null) {
+                dropMeteor(level, rand, t, rand.nextInt(5) == 0 ? 1 : 0);
+            }
+        }
+        // Further out: every now and then a meteor of random size somewhere across the city.
+        bombardmentBudget += VolcanoConfig.BOMBARDMENT_HITS_PER_MINUTE.get() * rate / 1200.0;
+        while (bombardmentBudget >= 1.0) {
+            bombardmentBudget -= 1.0;
+            double[] t = bombardmentTarget(level, rand);
+            if (t != null) {
+                double roll = rand.nextDouble();
+                dropMeteor(level, rand, t, roll < 0.55 ? 0 : roll < 0.88 ? 1 : 2);
+            }
         }
 
         if (VolcanoConfig.LAVA_SPILL.get() && stageTicks % VolcanoConfig.SPILL_INTERVAL_TICKS.get() == 0) {
-            int spills = activity == Activity.FRENZY ? 2 : rand.nextDouble() < activity.rate ? 1 : 0;
-            for (int i = 0; i < spills; i++) {
+            double spills = rate;
+            while (spills >= 1.0 || (spills > 0 && rand.nextDouble() < spills)) {
                 spillLava(level, rand);
+                spills -= 1.0;
             }
         }
 
@@ -287,11 +336,11 @@ public class Volcano {
         ashfall(level, data, rand);
         eruptionEffects(level, rand);
 
-        if (VolcanoConfig.VOLCANIC_LIGHTNING.get() && activity == Activity.FRENZY && rand.nextInt(50) == 0) {
+        if (VolcanoConfig.VOLCANIC_LIGHTNING.get() && intensity >= 12.0F && rand.nextInt(Math.max(8, 110 - (int) (intensity * 5))) == 0) {
             lightningNear(level, cx, cy, cz, rimRadius() * 2.5, rand);
         }
 
-        // Pyroclastic flows: one guaranteed early on, then at random (far likelier during a frenzy).
+        // Pyroclastic flows: one guaranteed early on, then at random - much likelier at high intensity.
         if (flowCooldown > 0) {
             flowCooldown--;
         } else if (!data.hasActiveFlow(id)) {
@@ -299,7 +348,7 @@ public class Volcano {
             if (firstFlowAt >= 0) {
                 due = stageTicks >= firstFlowAt;
             } else {
-                double chance = VolcanoConfig.FLOWS_PER_DAY.get() / TICKS_PER_DAY * activity.flowFactor;
+                double chance = VolcanoConfig.FLOWS_PER_DAY.get() / TICKS_PER_DAY * Math.pow(rate, 1.5);
                 due = rand.nextDouble() < chance;
             }
             if (due) {
@@ -312,26 +361,38 @@ public class Volcano {
         }
     }
 
-    private void tickActivity(ServerLevel level, RandomSource rand) {
-        if (!VolcanoConfig.ACTIVITY_PHASES.get()) {
-            activity = Activity.ACTIVE;
-            return;
+    /**
+     * Like a real volcano the intensity wanders: every few minutes it picks a new direction - a quiet
+     * lull, a steady stretch around its usual strength, a surge, or (rarely) a paroxysm far above it -
+     * and eases there over half a minute or so.
+     */
+    private void tickIntensity(ServerLevel level, RandomSource rand) {
+        if (!VolcanoConfig.INTENSITY_VARIES.get()) {
+            target = strength;
+        } else if (--episodeTicksLeft <= 0) {
+            double roll = rand.nextDouble();
+            if (roll < 0.22) {
+                target = strength * (0.15F + 0.25F * rand.nextFloat());               // lull
+                episodeTicksLeft = 2400 + rand.nextInt(3600);
+            } else if (roll < 0.72) {
+                target = strength * (0.75F + 0.5F * rand.nextFloat());                // steady
+                episodeTicksLeft = 2400 + rand.nextInt(4800);
+            } else if (roll < 0.94) {
+                target = strength * 1.35F + 1.0F + 3.0F * rand.nextFloat();           // surge
+                episodeTicksLeft = 1200 + rand.nextInt(2400);
+            } else {
+                target = strength + 6.0F + 6.0F * rand.nextFloat();                   // paroxysm
+                episodeTicksLeft = 600 + rand.nextInt(1200);
+            }
+            target = Mth.clamp(target, 1.0F, 20.0F);
         }
-        if (--activityTicksLeft > 0) {
-            return;
+        float before = intensity;
+        intensity = Mth.clamp(intensity + (target - intensity) * 0.003F, 1.0F, 20.0F);
+        // Announce big surges with a roar everyone nearby feels.
+        if (before < 14.0F && intensity >= 14.0F) {
+            level.playSound(null, cx + 0.5, cy, cz + 0.5, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 25.0F, 0.3F);
+            ModNetwork.shakeAround(level, cx, cy, cz, 350, 1.0F);
         }
-        double roll = rand.nextDouble();
-        Activity next = roll < 0.30 ? Activity.SIMMERING : roll < 0.75 ? Activity.ACTIVE : Activity.FRENZY;
-        activityTicksLeft = switch (next) {
-            case SIMMERING -> 2400 + rand.nextInt(3600);   // 2-5 min of relative calm
-            case ACTIVE -> 2400 + rand.nextInt(4800);      // 2-6 min
-            case FRENZY -> 1200 + rand.nextInt(2400);      // 1-3 min of chaos
-        };
-        if (next == Activity.FRENZY && activity != Activity.FRENZY) {
-            level.playSound(null, cx + 0.5, cy, cz + 0.5, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 20.0F, 0.3F);
-            ModNetwork.shakeAround(level, cx, cy, cz, 300, 0.8F);
-        }
-        activity = next;
     }
 
     private void tickCooling(ServerLevel level, RandomSource rand) {
@@ -383,7 +444,7 @@ public class Volcano {
         double rim = rimRadius();
         double full = Math.max(rim + 1, VolcanoConfig.SCORCH_RADIUS.get());
         double now = rim + (full - rim) * Math.min(1.0, 0.15 + stageTicks / (double) TICKS_PER_DAY);
-        int columns = (int) Math.round(VolcanoConfig.SCORCH_COLUMNS_PER_TICK.get() * Math.max(0.3, Math.min(1.5, activity.rate)));
+        int columns = (int) Math.round(VolcanoConfig.SCORCH_COLUMNS_PER_TICK.get() * Mth.clamp(rate(), 0.3, 1.5));
         for (int i = 0; i < columns; i++) {
             double a = rand.nextDouble() * Math.PI * 2;
             double d = rim + (now - rim) * Math.sqrt(rand.nextDouble());
@@ -402,7 +463,7 @@ public class Volcano {
         if (ashRadius <= 0) {
             return;
         }
-        int columns = (int) Math.round(VolcanoConfig.ASHFALL_COLUMNS_PER_TICK.get() * activity.rate);
+        int columns = (int) Math.round(VolcanoConfig.ASHFALL_COLUMNS_PER_TICK.get() * rate());
         for (int i = 0; i < columns; i++) {
             double a = rand.nextDouble() * Math.PI * 2;
             double d = ashRadius * rand.nextDouble();
@@ -497,39 +558,39 @@ public class Volcano {
 
     // ------------------------------------------------------------------ eruption
 
-    private void launchFireBomb(ServerLevel level, RandomSource rand) {
-        double[] t = pickTarget(level, rand, radius + 4);
-        if (t == null) {
-            return;
-        }
+    private void launchFireBomb(ServerLevel level, RandomSource rand, double[] t) {
         double ox = cx + 0.5 + (rand.nextDouble() - 0.5) * radius * 0.8;
         double oz = cz + 0.5 + (rand.nextDouble() - 0.5) * radius * 0.8;
         double oy = cy + 1.5;
+        float power = 0.6F + rand.nextFloat() * 0.8F; // small to big bangs
 
         if (inFlight.size() < VolcanoConfig.MAX_ACTIVE_PROJECTILES.get()
                 && RemoteImpacts.isLive(level, ox, oz) && RemoteImpacts.isLive(level, t[0], t[1])) {
             int ty = level.getHeight(Heightmap.Types.MOTION_BLOCKING, Mth.floor(t[0]), Mth.floor(t[1]));
             double dx = t[0] - ox;
             double dz = t[1] - oz;
-            // Longer flights for farther targets give high, rain-like arcs (about 30-65 blocks up).
+            // Longer flights for farther targets give high, rain-like arcs.
             int ticks = Mth.clamp((int) (Math.sqrt(Math.sqrt(dx * dx + dz * dz)) * 8.0), 40, 140);
             FireBombEntity bomb = new FireBombEntity(ModEntities.FIRE_BOMB.get(), level);
             bomb.launch(ox, oy, oz, dx, ty - oy, dz, ticks);
+            bomb.setPower(power);
             level.addFreshEntity(bomb);
             inFlight.add(bomb);
             if (rand.nextInt(4) == 0) {
                 level.playSound(null, ox, oy, oz, SoundEvents.BLAZE_SHOOT, SoundSource.BLOCKS, 4.0F, 0.5F + rand.nextFloat() * 0.3F);
             }
         } else if (VolcanoConfig.IMPACT_UNLOADED_CHUNKS.get()) {
-            RemoteImpacts.add(level, t[0], t[1], false);
+            RemoteImpacts.add(level, t[0], t[1], false, power);
         }
     }
 
-    private void dropMeteor(ServerLevel level, RandomSource rand) {
-        double[] t = pickTarget(level, rand, radius * 0.5);
-        if (t == null) {
-            return;
-        }
+    /** @param size 0 = small, 1 = medium, 2 = huge */
+    private void dropMeteor(ServerLevel level, RandomSource rand, double[] t, int size) {
+        float power = switch (size) {
+            case 0 -> 0.45F + rand.nextFloat() * 0.35F;
+            case 1 -> 0.9F + rand.nextFloat() * 0.4F;
+            default -> 1.6F + rand.nextFloat() * 0.8F;
+        };
         if (inFlight.size() < VolcanoConfig.MAX_ACTIVE_PROJECTILES.get() && RemoteImpacts.isLive(level, t[0], t[1])) {
             int ty = level.getHeight(Heightmap.Types.MOTION_BLOCKING, Mth.floor(t[0]), Mth.floor(t[1]));
             double a = rand.nextDouble() * Math.PI * 2;
@@ -544,30 +605,64 @@ public class Volcano {
             double dx = t[0] - sx;
             double dy = ty - sy;
             double dz = t[1] - sz;
-            int ticks = Mth.clamp((int) (Math.sqrt(dx * dx + dy * dy + dz * dz) / 2.2), 15, 120);
-            MeteorEntity meteor = new MeteorEntity(ModEntities.METEOR.get(), level);
+            // Big ones come in a little slower, so you see them coming.
+            double speed = size == 2 ? 1.6 : 2.2;
+            int ticks = Mth.clamp((int) (Math.sqrt(dx * dx + dy * dy + dz * dz) / speed), 15, 140);
+            MeteorEntity meteor = new MeteorEntity(switch (size) {
+                case 0 -> ModEntities.METEOR_SMALL.get();
+                case 1 -> ModEntities.METEOR.get();
+                default -> ModEntities.METEOR_LARGE.get();
+            }, level);
             meteor.launch(sx, sy, sz, dx, dy, dz, ticks);
+            meteor.setPower(power);
             level.addFreshEntity(meteor);
             inFlight.add(meteor);
         } else if (VolcanoConfig.IMPACT_UNLOADED_CHUNKS.get()) {
-            RemoteImpacts.add(level, t[0], t[1], true);
+            RemoteImpacts.add(level, t[0], t[1], true, power);
         }
     }
 
-    /** Random spot in a ring around the volcano, evenly spread by area, inside the world border. */
-    private double[] pickTarget(ServerLevel level, RandomSource rand, double minDist) {
-        double maxDist = Math.max(minDist + 1, VolcanoConfig.RAIN_RADIUS.get());
+    /**
+     * Barrage targets: most land just outside the rim, getting steadily rarer with distance (an
+     * exponential falloff) so there's no visible edge where the destruction stops.
+     */
+    private double[] barrageTarget(ServerLevel level, RandomSource rand) {
+        double rim = rimRadius();
+        double zone = Math.max(rim + 10, VolcanoConfig.BARRAGE_RADIUS.get());
+        double mean = (zone - rim) / 3.0;
         for (int tries = 0; tries < 6; tries++) {
-            double a = rand.nextDouble() * Math.PI * 2;
-            double minSq = minDist * minDist;
-            double d = Math.sqrt(minSq + (maxDist * maxDist - minSq) * rand.nextDouble());
-            double x = cx + 0.5 + Math.cos(a) * d;
-            double z = cz + 0.5 + Math.sin(a) * d;
-            if (level.getWorldBorder().isWithinBounds(BlockPos.containing(x, cy, z))) {
-                return new double[]{x, z};
+            double d = rim + 3 + -Math.log(1.0 - rand.nextDouble()) * mean;
+            if (d > zone * 1.8) {
+                continue;
+            }
+            double[] t = at(level, d, rand);
+            if (t != null) {
+                return t;
             }
         }
         return null;
+    }
+
+    /** Bombardment targets: anywhere from inside the barrage edge out to the bombardment radius, rarer further out. */
+    private double[] bombardmentTarget(ServerLevel level, RandomSource rand) {
+        double zone = VolcanoConfig.BARRAGE_RADIUS.get();
+        double far = Math.max(zone + 20, VolcanoConfig.BOMBARDMENT_RADIUS.get());
+        double from = zone * 0.6;
+        for (int tries = 0; tries < 6; tries++) {
+            double[] t = at(level, from + (far - from) * rand.nextDouble(), rand);
+            if (t != null) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    /** A random spot at distance {@code d} from the centre, or null if it's outside the world border. */
+    private double[] at(ServerLevel level, double d, RandomSource rand) {
+        double a = rand.nextDouble() * Math.PI * 2;
+        double x = cx + 0.5 + Math.cos(a) * d;
+        double z = cz + 0.5 + Math.sin(a) * d;
+        return level.getWorldBorder().isWithinBounds(BlockPos.containing(x, cy, z)) ? new double[]{x, z} : null;
     }
 
     /** Places one new lava source somewhere along a spill channel; the reach grows over the eruption. */
@@ -614,8 +709,8 @@ public class Volcano {
 
     private void eruptionEffects(ServerLevel level, RandomSource rand) {
         if (stageTicks % 2 == 0) {
-            int plumes = activity == Activity.FRENZY ? 4 : activity == Activity.ACTIVE ? 2 : 1;
-            double rise = activity == Activity.FRENZY ? 0.45 : 0.25;
+            int plumes = 1 + (int) (intensity / 6.0F);
+            double rise = 0.2 + intensity * 0.015;
             for (ServerPlayer player : playersNear(level, cx, cy, cz, 640)) {
                 for (int i = 0; i < plumes; i++) {
                     Fx.far(player, ParticleTypes.CAMPFIRE_SIGNAL_SMOKE,
@@ -623,19 +718,19 @@ public class Volcano {
                             cz + 0.5 + (rand.nextDouble() - 0.5) * radius * 0.7,
                             0, 0.0, rise + rand.nextDouble() * 0.15, 0.0, 1.0);
                 }
-                if (activity != Activity.SIMMERING) {
-                    Fx.far(player, ParticleTypes.LAVA, cx + 0.5, cy + 1.0, cz + 0.5, 6 * plumes,
+                if (intensity >= 3.0F) {
+                    Fx.far(player, ParticleTypes.LAVA, cx + 0.5, cy + 1.0, cz + 0.5, 3 * plumes,
                             radius * 0.4, 0.3, radius * 0.4, 0.0);
-                    Fx.far(player, ParticleTypes.FLAME, cx + 0.5, cy + 1.5, cz + 0.5, 3 * plumes,
+                    Fx.far(player, ParticleTypes.FLAME, cx + 0.5, cy + 1.5, cz + 0.5, 2 * plumes,
                             radius * 0.3, 1.0, radius * 0.3, 0.08);
                 }
             }
         }
-        int rumbleOdds = activity == Activity.FRENZY ? 15 : activity == Activity.ACTIVE ? 45 : 160;
+        int rumbleOdds = Math.max(10, 200 - (int) (intensity * 9));
         if (rand.nextInt(rumbleOdds) == 0) {
             level.playSound(null, cx + 0.5, cy, cz + 0.5, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS,
-                    12.0F, 0.3F + rand.nextFloat() * 0.15F);
-            if (activity == Activity.FRENZY) {
+                    8.0F + intensity * 0.5F, 0.3F + rand.nextFloat() * 0.15F);
+            if (intensity >= 12.0F) {
                 ModNetwork.shakeAround(level, cx, cy, cz, 160, 0.4F);
             }
         }
@@ -706,7 +801,7 @@ public class Volcano {
                 it.remove();
             } else if (!level.isPositionEntityTicking(e.blockPosition())) {
                 if (VolcanoConfig.IMPACT_UNLOADED_CHUNKS.get()) {
-                    RemoteImpacts.add(level, e.getTargetX(), e.getTargetZ(), e.isMeteor());
+                    RemoteImpacts.add(level, e.getTargetX(), e.getTargetZ(), e.isMeteor(), e.getPower());
                 }
                 e.discard();
                 it.remove();
@@ -743,7 +838,10 @@ public class Volcano {
         tag.putInt("Y", cy);
         tag.putInt("Z", cz);
         tag.putLong("Seed", seed);
+        tag.putFloat("Strength", strength);
         tag.putFloat("Intensity", intensity);
+        tag.putFloat("Target", target);
+        tag.putInt("EpisodeTicks", episodeTicksLeft);
         tag.putInt("EruptionTicks", eruptionTicks);
         tag.putInt("Radius", radius);
         tag.putInt("Depth", depth);
@@ -753,32 +851,31 @@ public class Volcano {
         tag.putInt("StageTicks", stageTicks);
         tag.putInt("CarveIndex", carveIndex);
         tag.putInt("CoolIndex", coolIndex);
-        tag.putString("Activity", activity.name());
-        tag.putInt("ActivityTicks", activityTicksLeft);
         tag.putInt("FirstFlowAt", firstFlowAt);
         tag.putInt("FlowCooldown", flowCooldown);
         return tag;
     }
 
     static Volcano load(CompoundTag tag) {
+        // Volcanoes saved by older versions had no strength; give them the default.
+        float strength = tag.contains("Strength") ? tag.getFloat("Strength") : VolcanoConfig.DEFAULT_INTENSITY.get();
         Volcano v = new Volcano(tag.getInt("Id"),
                 new BlockPos(tag.getInt("X"), tag.getInt("Y"), tag.getInt("Z")),
-                tag.getLong("Seed"), tag.getFloat("Intensity"), tag.getInt("EruptionTicks"),
+                tag.getLong("Seed"), strength, tag.getInt("EruptionTicks"),
                 tag.getInt("Radius"), tag.getInt("Depth"), tag.getInt("ClearHeight"), tag.getInt("MaxSpill"));
         try {
             v.stage = Stage.valueOf(tag.getString("Stage"));
         } catch (IllegalArgumentException ex) {
             v.stage = Stage.DONE;
         }
-        try {
-            v.activity = Activity.valueOf(tag.getString("Activity"));
-        } catch (IllegalArgumentException ex) {
-            v.activity = Activity.ACTIVE;
+        if (tag.contains("Strength")) {
+            v.intensity = Mth.clamp(tag.getFloat("Intensity"), 1.0F, 20.0F);
+            v.target = Mth.clamp(tag.getFloat("Target"), 1.0F, 20.0F);
+            v.episodeTicksLeft = tag.getInt("EpisodeTicks");
         }
         v.stageTicks = tag.getInt("StageTicks");
         v.carveIndex = tag.getInt("CarveIndex");
         v.coolIndex = tag.getInt("CoolIndex");
-        v.activityTicksLeft = tag.getInt("ActivityTicks");
         v.firstFlowAt = tag.contains("FirstFlowAt") ? tag.getInt("FirstFlowAt") : -1;
         v.flowCooldown = tag.getInt("FlowCooldown");
         return v;

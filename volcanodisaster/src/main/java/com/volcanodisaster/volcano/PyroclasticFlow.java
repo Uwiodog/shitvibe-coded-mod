@@ -149,7 +149,7 @@ public class PyroclasticFlow {
         // Blow out what's left right around the rim.
         for (int i = 0; i < 6; i++) {
             double a = rand.nextDouble() * Math.PI * 2;
-            Impacts.impact(level, cx + 0.5 + Math.cos(a) * (rim + 4), cy + 1, cz + 0.5 + Math.sin(a) * (rim + 4), true, rand);
+            Impacts.impact(level, cx + 0.5 + Math.cos(a) * (rim + 4), cy + 1, cz + 0.5 + Math.sin(a) * (rim + 4), true, 1.3F, rand);
         }
     }
 

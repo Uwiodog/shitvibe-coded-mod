@@ -16,6 +16,8 @@ public final class ClientSetup {
     @SubscribeEvent
     public static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {
         event.registerEntityRenderer(ModEntities.FIRE_BOMB.get(), ctx -> new ThrownItemRenderer<>(ctx, 2.5F, true));
-        event.registerEntityRenderer(ModEntities.METEOR.get(), ctx -> new ThrownItemRenderer<>(ctx, 5.0F, true));
+        event.registerEntityRenderer(ModEntities.METEOR_SMALL.get(), ctx -> new ThrownItemRenderer<>(ctx, 3.5F, true));
+        event.registerEntityRenderer(ModEntities.METEOR.get(), ctx -> new ThrownItemRenderer<>(ctx, 5.5F, true));
+        event.registerEntityRenderer(ModEntities.METEOR_LARGE.get(), ctx -> new ThrownItemRenderer<>(ctx, 9.0F, true));
     }
 }

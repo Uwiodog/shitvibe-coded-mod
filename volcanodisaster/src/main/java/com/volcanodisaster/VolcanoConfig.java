@@ -17,15 +17,18 @@ public final class VolcanoConfig {
 
     // Eruption
     public static final ForgeConfigSpec.DoubleValue ERUPTION_DAYS;
-    public static final ForgeConfigSpec.DoubleValue FIRE_BOMBS_PER_SECOND;
-    public static final ForgeConfigSpec.DoubleValue METEORS_PER_SECOND;
-    public static final ForgeConfigSpec.IntValue RAIN_RADIUS;
+    public static final ForgeConfigSpec.IntValue DEFAULT_INTENSITY;
+    public static final ForgeConfigSpec.BooleanValue INTENSITY_VARIES;
+    public static final ForgeConfigSpec.IntValue BARRAGE_RADIUS;
+    public static final ForgeConfigSpec.DoubleValue BARRAGE_BOMBS_PER_SECOND;
+    public static final ForgeConfigSpec.DoubleValue BARRAGE_METEORS_PER_SECOND;
+    public static final ForgeConfigSpec.IntValue BOMBARDMENT_RADIUS;
+    public static final ForgeConfigSpec.DoubleValue BOMBARDMENT_HITS_PER_MINUTE;
     public static final ForgeConfigSpec.DoubleValue FIRE_BOMB_BLAST_RADIUS;
     public static final ForgeConfigSpec.DoubleValue METEOR_BLAST_RADIUS;
     public static final ForgeConfigSpec.DoubleValue OBSIDIAN_CHANCE;
     public static final ForgeConfigSpec.DoubleValue FIRE_CHANCE;
     public static final ForgeConfigSpec.IntValue MAX_ACTIVE_PROJECTILES;
-    public static final ForgeConfigSpec.BooleanValue ACTIVITY_PHASES;
     public static final ForgeConfigSpec.BooleanValue VOLCANIC_LIGHTNING;
 
     // Scorched zone + ashfall
@@ -78,18 +81,26 @@ public final class VolcanoConfig {
                 .defineInRange("formingSeconds", 10, 0, 600);
         b.pop();
 
-        b.comment("Fire and meteor rain.").push("eruption");
+        b.comment("The eruption. Rates are given for intensity 10 and scale with the volcano's current intensity (20 = double, 5 = half, 1 = a tenth).").push("eruption");
         ERUPTION_DAYS = b.comment("How many in-game days the eruption lasts (1 day = 20 real minutes; 0 = until you run /volcano stop). /volcano spawn can override this.")
                 .defineInRange("eruptionDays", 3.0, 0.0, 100.0);
-        FIRE_BOMBS_PER_SECOND = b.comment("Burning lava bombs thrown out of the caldera per second while 'active' (multiplied by intensity and the current phase).")
-                .defineInRange("fireBombsPerSecond", 10.0, 0.0, 200.0);
-        METEORS_PER_SECOND = b.comment("Meteors falling from the sky per second while 'active' (multiplied by intensity and the current phase).")
-                .defineInRange("meteorsPerSecond", 2.0, 0.0, 100.0);
-        RAIN_RADIUS = b.comment("How far from the volcano fire bombs and meteors can land.")
-                .defineInRange("rainRadius", 200, 16, 2000);
-        FIRE_BOMB_BLAST_RADIUS = b.comment("Crater radius of a fire bomb hit.")
+        DEFAULT_INTENSITY = b.comment("Strength of a new volcano on a 1-20 scale when /volcano spawn doesn't give one.")
+                .defineInRange("intensity", 8, 1, 20);
+        INTENSITY_VARIES = b.comment("Like a real volcano, the intensity rises and falls over the eruption: quiet lulls, steady stretches, surges and the occasional paroxysm far above its usual strength. Off = it stays at its strength.")
+                .define("intensityVaries", true);
+        BARRAGE_RADIUS = b.comment("The heavy fire-bomb barrage lands close to the caldera, thinning out gradually towards this distance (no hard edge).")
+                .defineInRange("barrageRadius", 100, 20, 1000);
+        BARRAGE_BOMBS_PER_SECOND = b.comment("Fire bombs thrown into the barrage zone per second at intensity 10.")
+                .defineInRange("barrageBombsPerSecond", 4.0, 0.0, 200.0);
+        BARRAGE_METEORS_PER_SECOND = b.comment("Small meteors falling into the barrage zone per second at intensity 10.")
+                .defineInRange("barrageMeteorsPerSecond", 0.25, 0.0, 50.0);
+        BOMBARDMENT_RADIUS = b.comment("Beyond the barrage, the rest of the city gets a slow bombardment of meteors - small to huge - out to this distance, getting rarer the further out.")
+                .defineInRange("bombardmentRadius", 500, 50, 3000);
+        BOMBARDMENT_HITS_PER_MINUTE = b.comment("Meteors per minute in the slow bombardment at intensity 10.")
+                .defineInRange("bombardmentHitsPerMinute", 6.0, 0.0, 600.0);
+        FIRE_BOMB_BLAST_RADIUS = b.comment("Average crater radius of a fire bomb hit (each one varies).")
                 .defineInRange("fireBombBlastRadius", 2.5, 0.0, 10.0);
-        METEOR_BLAST_RADIUS = b.comment("Crater radius of a meteor hit.")
+        METEOR_BLAST_RADIUS = b.comment("Crater radius of a medium meteor. Small ones are about half this, big ones about twice.")
                 .defineInRange("meteorBlastRadius", 5.5, 0.0, 16.0);
         OBSIDIAN_CHANCE = b.comment("Chance for each block of a meteor crater's surface to turn into obsidian/magma (fire bombs use a quarter of this).")
                 .defineInRange("obsidianChance", 0.45, 0.0, 1.0);
@@ -97,9 +108,7 @@ public final class VolcanoConfig {
                 .defineInRange("fireChance", 0.35, 0.0, 1.0);
         MAX_ACTIVE_PROJECTILES = b.comment("Max flying fire bombs + meteors per volcano at once (keeps the game from lagging out).")
                 .defineInRange("maxActiveProjectiles", 600, 10, 5000);
-        ACTIVITY_PHASES = b.comment("The eruption switches every few minutes between simmering (light rain), active, and frenzy (heavy rain, lightning, likely pyroclastic flows). Off = always active.")
-                .define("activityPhases", true);
-        VOLCANIC_LIGHTNING = b.comment("Lightning flashes in the eruption column during frenzies and before pyroclastic flows (visual only, doesn't start fires).")
+        VOLCANIC_LIGHTNING = b.comment("Lightning flashes in the eruption column at high intensity and before pyroclastic flows (visual only, doesn't start fires).")
                 .define("volcanicLightning", true);
         b.pop();
 
@@ -108,12 +117,12 @@ public final class VolcanoConfig {
                 .defineInRange("radius", 72, 0, 512);
         SCORCH_COLUMNS_PER_TICK = b.comment("How many spots inside the scorch zone get hit per tick.")
                 .defineInRange("columnsPerTick", 30, 0, 1000);
-        ASHFALL_COLUMNS_PER_TICK = b.comment("How many spots inside the ash biome get a layer of ash per tick while the volcano erupts (0 = no ash piling up).")
+        ASHFALL_COLUMNS_PER_TICK = b.comment("How many spots inside the ash biome get a layer of ash per tick at intensity 10 (0 = no ash piling up).")
                 .defineInRange("ashfallColumnsPerTick", 6, 0, 500);
         b.pop();
 
         b.comment("Pyroclastic flows: after a short build-up the eruption column collapses and a scorching ash cloud races outwards along the ground.").push("pyroclasticFlow");
-        FLOWS_PER_DAY = b.comment("Average pyroclastic flows per in-game day (0 = only when you run /volcano flow). The first one comes 3-6 minutes into the eruption.")
+        FLOWS_PER_DAY = b.comment("Average pyroclastic flows per in-game day at intensity 10 (far more likely during surges, rare in lulls; 0 = only when you run /volcano flow). The first one comes 3-6 minutes into the eruption.")
                 .defineInRange("flowsPerDay", 2.0, 0.0, 50.0);
         FLOW_RADIUS = b.comment("How far a flow can reach from the volcano (the actual reach varies by direction).")
                 .defineInRange("radius", 260, 32, 1500);
@@ -143,7 +152,7 @@ public final class VolcanoConfig {
         b.comment("Lava slowly overflowing from the caldera.").push("lavaSpill");
         LAVA_SPILL = b.comment("Whether the caldera slowly spills lava into its surroundings.")
                 .define("enabled", true);
-        SPILL_INTERVAL_TICKS = b.comment("Ticks between new lava spill sources while 'active' (20 ticks = 1 second; lower = more lava).")
+        SPILL_INTERVAL_TICKS = b.comment("Ticks between new lava spill sources at intensity 10 (20 ticks = 1 second; lower = more lava).")
                 .defineInRange("intervalTicks", 10, 1, 1200);
         MAX_SPILL_DISTANCE = b.comment("How far beyond the caldera rim the spill can reach.")
                 .defineInRange("maxDistance", 50, 0, 256);

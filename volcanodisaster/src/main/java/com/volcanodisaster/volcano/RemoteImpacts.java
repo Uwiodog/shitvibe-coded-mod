@@ -36,12 +36,14 @@ public final class RemoteImpacts {
         final double x;
         final double z;
         final boolean meteor;
+        final float power;
         int waited;
 
-        Pending(double x, double z, boolean meteor) {
+        Pending(double x, double z, boolean meteor, float power) {
             this.x = x;
             this.z = z;
             this.meteor = meteor;
+            this.power = power;
         }
     }
 
@@ -53,12 +55,12 @@ public final class RemoteImpacts {
 
     private RemoteImpacts() {}
 
-    public static void add(ServerLevel level, double x, double z, boolean meteor) {
+    public static void add(ServerLevel level, double x, double z, boolean meteor, float power) {
         State state = STATES.computeIfAbsent(level.dimension(), k -> new State());
         if (state.queue.size() >= MAX_QUEUE) {
             return;
         }
-        state.queue.add(new Pending(x, z, meteor));
+        state.queue.add(new Pending(x, z, meteor, power));
     }
 
     public static void tick(ServerLevel level) {
@@ -94,7 +96,7 @@ public final class RemoteImpacts {
             if (isReady(level, cp)) {
                 int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING, Mth.floor(p.x), Mth.floor(p.z));
                 if (y > level.getMinBuildHeight()) {
-                    Impacts.impact(level, p.x, y, p.z, p.meteor, level.getRandom());
+                    Impacts.impact(level, p.x, y, p.z, p.meteor, p.power, level.getRandom());
                 }
                 hits++;
             } else {

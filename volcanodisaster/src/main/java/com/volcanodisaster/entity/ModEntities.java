@@ -19,13 +19,20 @@ public final class ModEntities {
                     .updateInterval(1)
                     .build("fire_bomb"));
 
-    public static final RegistryObject<EntityType<MeteorEntity>> METEOR = ENTITIES.register("meteor",
-            () -> EntityType.Builder.<MeteorEntity>of(MeteorEntity::new, MobCategory.MISC)
-                    .sized(1.2F, 1.2F)
-                    .fireImmune()
-                    .clientTrackingRange(20)
-                    .updateInterval(1)
-                    .build("meteor"));
+    /** Three sizes of the same falling rock; they only differ in hitbox, look and how big the bang is. */
+    public static final RegistryObject<EntityType<MeteorEntity>> METEOR_SMALL = meteor("meteor_small", 0.8F, 20);
+    public static final RegistryObject<EntityType<MeteorEntity>> METEOR = meteor("meteor", 1.2F, 20);
+    public static final RegistryObject<EntityType<MeteorEntity>> METEOR_LARGE = meteor("meteor_large", 2.0F, 24);
+
+    private static RegistryObject<EntityType<MeteorEntity>> meteor(String name, float size, int trackingRange) {
+        return ENTITIES.register(name,
+                () -> EntityType.Builder.<MeteorEntity>of(MeteorEntity::new, MobCategory.MISC)
+                        .sized(size, size)
+                        .fireImmune()
+                        .clientTrackingRange(trackingRange)
+                        .updateInterval(1)
+                        .build(name));
+    }
 
     private ModEntities() {}
 }

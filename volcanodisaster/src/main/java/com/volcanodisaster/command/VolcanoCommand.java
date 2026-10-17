@@ -18,8 +18,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * /volcano spawn [pos] [intensity] [days]
- * /volcano list | skip [id] | flow [id] | stop [id|all] | remove [id|all] | ashzones clear
+ * /volcano spawn [pos] [intensity 1-20] [days]
+ * /volcano list | intensity <1-20> [id] | skip [id] | flow [id] | stop [id|all] | remove [id|all] | ashzones clear
  * plus /disaster spawn volcano [pos] and /disaster skip volcano [pos] like the old mod.
  */
 public final class VolcanoCommand {
@@ -29,16 +29,23 @@ public final class VolcanoCommand {
         dispatcher.register(Commands.literal("volcano")
                 .requires(s -> s.hasPermission(2))
                 .then(Commands.literal("spawn")
-                        .executes(ctx -> spawn(ctx.getSource(), here(ctx.getSource()), 1.0F, -1))
+                        .executes(ctx -> spawn(ctx.getSource(), here(ctx.getSource()), -1, -1))
                         .then(Commands.argument("pos", BlockPosArgument.blockPos())
-                                .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"), 1.0F, -1))
-                                .then(Commands.argument("intensity", FloatArgumentType.floatArg(0.1F, 20.0F))
+                                .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"), -1, -1))
+                                .then(Commands.argument("intensity", IntegerArgumentType.integer(1, 20))
                                         .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"),
-                                                FloatArgumentType.getFloat(ctx, "intensity"), -1))
+                                                IntegerArgumentType.getInteger(ctx, "intensity"), -1))
                                         .then(Commands.argument("days", FloatArgumentType.floatArg(0.0F, 100.0F))
                                                 .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"),
-                                                        FloatArgumentType.getFloat(ctx, "intensity"),
+                                                        IntegerArgumentType.getInteger(ctx, "intensity"),
                                                         FloatArgumentType.getFloat(ctx, "days")))))))
+                .then(Commands.literal("intensity")
+                        .then(Commands.argument("value", IntegerArgumentType.integer(1, 20))
+                                .executes(ctx -> setIntensity(ctx.getSource(), nearest(ctx.getSource(), here(ctx.getSource())),
+                                        IntegerArgumentType.getInteger(ctx, "value")))
+                                .then(Commands.argument("id", IntegerArgumentType.integer(1))
+                                        .executes(ctx -> setIntensity(ctx.getSource(), byId(ctx),
+                                                IntegerArgumentType.getInteger(ctx, "value"))))))
                 .then(Commands.literal("list")
                         .executes(ctx -> list(ctx.getSource())))
                 .then(Commands.literal("skip")
@@ -70,9 +77,9 @@ public final class VolcanoCommand {
                 .requires(s -> s.hasPermission(2))
                 .then(Commands.literal("spawn")
                         .then(Commands.literal("volcano")
-                                .executes(ctx -> spawn(ctx.getSource(), here(ctx.getSource()), 1.0F, -1))
+                                .executes(ctx -> spawn(ctx.getSource(), here(ctx.getSource()), -1, -1))
                                 .then(Commands.argument("pos", BlockPosArgument.blockPos())
-                                        .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"), 1.0F, -1)))))
+                                        .executes(ctx -> spawn(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"), -1, -1)))))
                 .then(Commands.literal("skip")
                         .then(Commands.literal("volcano")
                                 .executes(ctx -> skip(ctx.getSource(), nearest(ctx.getSource(), here(ctx.getSource()))))
@@ -81,14 +88,30 @@ public final class VolcanoCommand {
                                                 nearest(ctx.getSource(), BlockPosArgument.getLoadedBlockPos(ctx, "pos"))))))));
     }
 
-    private static int spawn(CommandSourceStack source, BlockPos pos, float intensity, float days) {
+    /** @param intensity 1-20, or -1 for the configured default */
+    private static int spawn(CommandSourceStack source, BlockPos pos, int intensity, float days) {
         ServerLevel level = source.getLevel();
         Volcano v = VolcanoData.get(level).spawn(level, pos, intensity, days);
         String length = v.eruptionLength();
+        int strength = Math.round(v.getStrength());
         source.sendSuccess(() -> Component.literal("Volcano #" + v.getId() + " is opening at "
-                + pos.getX() + " " + pos.getY() + " " + pos.getZ() + " (erupts " + (length.startsWith("until") ? length : "for " + length)
-                + ", intensity " + intensity + "). Force a pyroclastic flow with /volcano flow, end it with /volcano stop " + v.getId()), true);
+                + pos.getX() + " " + pos.getY() + " " + pos.getZ() + " (intensity " + strength + "/20, erupts "
+                + (length.startsWith("until") ? length : "for " + length)
+                + "). Change it with /volcano intensity <1-20>, force a pyroclastic flow with /volcano flow, end it with /volcano stop "
+                + v.getId()), true);
         return v.getId();
+    }
+
+    private static int setIntensity(CommandSourceStack source, Volcano v, int value) {
+        if (v == null) {
+            source.sendFailure(Component.literal("No volcano found."));
+            return 0;
+        }
+        v.setStrength(value);
+        data(source).setDirty();
+        source.sendSuccess(() -> Component.literal("Volcano #" + v.getId() + " is heading to intensity " + value
+                + "/20 (currently " + String.format("%.1f", v.getIntensity()) + ")."), true);
+        return value;
     }
 
     private static int list(CommandSourceStack source) {
@@ -101,7 +124,8 @@ public final class VolcanoCommand {
             BlockPos c = v.getCenter();
             String stage = v.getStage().name().toLowerCase();
             if (v.getStage() == Volcano.Stage.ERUPTING) {
-                stage += ", " + v.getActivity().name().toLowerCase();
+                stage += ", intensity " + String.format("%.1f", v.getIntensity()) + "/20 " + v.trend()
+                        + " (" + v.getActivity().name().toLowerCase() + ", usual " + Math.round(v.getStrength()) + ")";
             }
             String text = "#" + v.getId() + "  " + c.getX() + " " + c.getY() + " " + c.getZ()
                     + "  " + stage + " (" + v.timeLeft() + " left)";

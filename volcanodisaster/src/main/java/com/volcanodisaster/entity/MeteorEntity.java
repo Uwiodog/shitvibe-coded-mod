@@ -27,17 +27,21 @@ public class MeteorEntity extends VolcanicProjectile {
 
     @Override
     protected void spawnTrail(Vec3 motion) {
-        // Fill in the gap the meteor covers each tick so the trail looks continuous.
-        for (int i = 0; i < 3; i++) {
-            double f = i / 3.0;
-            double x = this.getX() - motion.x * f + (this.random.nextDouble() - 0.5) * 0.6;
-            double y = this.getY() + 0.6 - motion.y * f + (this.random.nextDouble() - 0.5) * 0.6;
-            double z = this.getZ() - motion.z * f + (this.random.nextDouble() - 0.5) * 0.6;
+        // Fill in the gap the meteor covers each tick so the trail looks continuous; bigger rocks, fatter trails.
+        float size = this.getBbWidth();
+        int count = Math.max(2, Math.round(2.5F * size));
+        double spread = 0.5 * size;
+        double mid = size * 0.5;
+        for (int i = 0; i < count; i++) {
+            double f = i / (double) count;
+            double x = this.getX() - motion.x * f + (this.random.nextDouble() - 0.5) * spread;
+            double y = this.getY() + mid - motion.y * f + (this.random.nextDouble() - 0.5) * spread;
+            double z = this.getZ() - motion.z * f + (this.random.nextDouble() - 0.5) * spread;
             this.level().addAlwaysVisibleParticle(ParticleTypes.FLAME, true, x, y, z, 0.0, 0.0, 0.0);
             this.level().addAlwaysVisibleParticle(ParticleTypes.LARGE_SMOKE, true, x, y, z, 0.0, 0.03, 0.0);
         }
         if (this.random.nextInt(3) == 0) {
-            this.level().addAlwaysVisibleParticle(ParticleTypes.LAVA, true, this.getX(), this.getY() + 0.6, this.getZ(), 0.0, 0.0, 0.0);
+            this.level().addAlwaysVisibleParticle(ParticleTypes.LAVA, true, this.getX(), this.getY() + mid, this.getZ(), 0.0, 0.0, 0.0);
         }
     }
 

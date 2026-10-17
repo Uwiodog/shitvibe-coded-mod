@@ -53,10 +53,12 @@ public class VolcanoData extends SavedData {
         return Collections.unmodifiableList(volcanoes);
     }
 
-    public Volcano spawn(ServerLevel level, BlockPos center, float intensity, double days) {
+    /** @param strength 1-20, or below 1 for the configured default; @param days below 0 for the configured default */
+    public Volcano spawn(ServerLevel level, BlockPos center, float strength, double days) {
         double d = days >= 0 ? days : VolcanoConfig.ERUPTION_DAYS.get();
         int eruptionTicks = (int) Math.round(d * Volcano.TICKS_PER_DAY);
-        Volcano v = new Volcano(nextId++, center, level.getRandom().nextLong(), intensity, eruptionTicks,
+        float s = strength >= 1.0F ? strength : VolcanoConfig.DEFAULT_INTENSITY.get();
+        Volcano v = new Volcano(nextId++, center, level.getRandom().nextLong(), s, eruptionTicks,
                 VolcanoConfig.CALDERA_RADIUS.get(), VolcanoConfig.CALDERA_DEPTH.get(),
                 VolcanoConfig.CLEAR_HEIGHT.get(), VolcanoConfig.MAX_SPILL_DISTANCE.get());
         volcanoes.add(v);

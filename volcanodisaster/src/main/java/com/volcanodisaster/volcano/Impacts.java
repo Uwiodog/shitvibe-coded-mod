@@ -25,10 +25,13 @@ public final class Impacts {
 
     private Impacts() {}
 
-    public static void impact(ServerLevel level, double x, double y, double z, boolean meteor, RandomSource rand) {
+    /**
+     * @param power blast size multiplier: about 0.5 for a small meteor, 1 for a medium one, 2 for a huge one
+     */
+    public static void impact(ServerLevel level, double x, double y, double z, boolean meteor, float power, RandomSource rand) {
         double base = meteor ? VolcanoConfig.METEOR_BLAST_RADIUS.get() : VolcanoConfig.FIRE_BOMB_BLAST_RADIUS.get();
-        double r = base * (0.8 + rand.nextDouble() * 0.4);
-        BlockPos c = BlockPos.containing(x, y - (meteor ? 1.0 : 0.3), z);
+        double r = base * power * (0.85 + rand.nextDouble() * 0.3);
+        BlockPos c = BlockPos.containing(x, y - (meteor ? Math.min(3.0, power) : 0.3), z);
 
         if (r > 0.5) {
             carveCrater(level, c, r, rand);
@@ -37,9 +40,9 @@ public final class Impacts {
         double fireChance = Math.min(1.0, VolcanoConfig.FIRE_CHANCE.get() * (meteor ? 1.0 : 1.7));
         scorch(level, c, Math.max(r, 1.0) + 1.5, obsidianChance, fireChance, rand);
         if (meteor) {
-            placeMeteorite(level, c, r, rand);
+            placeMeteorite(level, c, r, power, rand);
         }
-        effects(level, x, y, z, r, meteor, rand);
+        effects(level, x, y, z, r, meteor, power, rand);
     }
 
     /** Blows out a slightly flattened, ragged sphere of blocks. Obsidian and other blast-proof blocks survive. */
@@ -102,7 +105,7 @@ public final class Impacts {
     }
 
     /** A small lump of obsidian and magma sitting at the bottom of a meteor crater. */
-    private static void placeMeteorite(ServerLevel level, BlockPos c, double r, RandomSource rand) {
+    private static void placeMeteorite(ServerLevel level, BlockPos c, double r, float power, RandomSource rand) {
         int top = c.getY() + Mth.ceil(r);
         int bottom = c.getY() - Mth.ceil(r) - 4;
         BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos(c.getX(), top, c.getZ());
@@ -122,11 +125,14 @@ public final class Impacts {
             return;
         }
         int cy = floor + 1;
-        for (int dx = -2; dx <= 2; dx++) {
-            for (int dy = -1; dy <= 2; dy++) {
-                for (int dz = -2; dz <= 2; dz++) {
+        // Bigger meteors leave bigger lumps.
+        double coreSq = (2.2 + rand.nextDouble() * 1.5) * Math.max(0.5, power * power);
+        int ext = Mth.ceil(Math.sqrt(coreSq)) + 1;
+        for (int dx = -ext; dx <= ext; dx++) {
+            for (int dy = -1; dy <= ext; dy++) {
+                for (int dz = -ext; dz <= ext; dz++) {
                     double d2 = dx * dx + dy * dy + dz * dz;
-                    if (d2 > 2.2 + rand.nextDouble() * 1.5) {
+                    if (d2 > coreSq + rand.nextDouble() * 1.2) {
                         continue;
                     }
                     p.set(c.getX() + dx, cy + dy, c.getZ() + dz);
@@ -147,27 +153,34 @@ public final class Impacts {
         }
     }
 
-    private static void effects(ServerLevel level, double x, double y, double z, double r, boolean meteor, RandomSource rand) {
+    private static void effects(ServerLevel level, double x, double y, double z, double r, boolean meteor,
+                                float power, RandomSource rand) {
         boolean playerNear = false;
+        double sightRange = 320.0 * Math.max(1.0, power);
         for (ServerPlayer player : level.players()) {
             double dSq = player.distanceToSqr(x, y, z);
             if (dSq < 192.0 * 192.0) {
                 playerNear = true;
             }
-            if (meteor && dSq < 320.0 * 320.0) {
-                Fx.far(player, ParticleTypes.EXPLOSION_EMITTER, x, y + 1.0, z, 1, 0.0, 0.0, 0.0, 0.0);
-                Fx.far(player, ParticleTypes.LARGE_SMOKE, x, y + 1.0, z, 25, r * 0.5, 1.0, r * 0.5, 0.05);
+            if (meteor && dSq < sightRange * sightRange) {
+                Fx.far(player, ParticleTypes.EXPLOSION_EMITTER, x, y + 1.0, z, power > 1.5F ? 4 : 1, r * 0.3, r * 0.2, r * 0.3, 0.0);
+                Fx.far(player, ParticleTypes.LARGE_SMOKE, x, y + 1.0, z, (int) (25 * power), r * 0.5, 1.0 + r * 0.2, r * 0.5, 0.05);
+                if (power > 1.5F) {
+                    Fx.far(player, ParticleTypes.CAMPFIRE_SIGNAL_SMOKE, x, y + 1.0, z, 12, r * 0.4, 1.0, r * 0.4, 0.02);
+                }
             }
         }
+        // A distant bang: everyone in earshot hears it (big meteors carry for hundreds of blocks).
+        if (meteor) {
+            level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS,
+                    6.0F + 10.0F * power, Math.max(0.3F, 0.7F - 0.2F * power + rand.nextFloat() * 0.15F));
+            ModNetwork.shakeAround(level, x, y, z, 40 + 50 * power, 0.4F + 0.5F * power);
+        }
         if (!playerNear) {
-            return; // Nobody to hear or get hurt; the blocks are already wrecked.
+            return; // nobody close enough to get hurt
         }
         // Damage and knock back mobs/players. Blocks were handled above, so this one doesn't break any.
-        level.explode(null, x, y, z, (float) Math.min(Math.max(r, 1.5), 6.0), false, Level.ExplosionInteraction.NONE);
-        if (meteor) {
-            level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE, SoundSource.BLOCKS, 10.0F, 0.5F + rand.nextFloat() * 0.2F);
-            ModNetwork.shakeAround(level, x, y, z, 48, 0.9F);
-        }
+        level.explode(null, x, y, z, (float) Math.min(Math.max(r, 1.5), 8.0), false, Level.ExplosionInteraction.NONE);
     }
 
     /** Removes a block without dropping items. Returns true if something was removed. */
